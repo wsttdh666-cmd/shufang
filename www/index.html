@@ -85,8 +85,16 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
 <!-- ============ 导书 ============ -->
 <div class="view" id="v-export" hidden>
   <section>
-    <h2>从平台导出<small>导出的 txt 自动进书架</small></h2>
-    <p class="hint">会打开一个站内浏览器。在里面登录，再打开书的详情页（有目录的那一页），页面上会出现下载图标，点它开始导出。登录后，买过的章节也能导。</p>
+    <h2>粘贴链接导书</h2>
+    <label for="bookLink">作品链接或分享文案<input type="text" id="bookLink" placeholder="粘贴起点、晋江、番茄或刺猬猫的作品链接" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <div class="row fill"><button class="primary" id="linkStart">解析并导入</button><button id="linkPause" hidden>暂停</button></div>
+    <p class="hint" id="linkStatus" role="status">按目录顺序收录网页公开提供的文字，完成后可直接下载 TXT。</p>
+    <details id="linkDetails" hidden><summary>查看章节</summary><pre class="log" id="linkChapters"></pre></details>
+    <div class="row fill"><button id="linkSave" hidden>收下已读取的章节</button><button id="linkDownload" hidden>下载 TXT</button></div>
+  </section>
+  <section>
+    <h2>站内浏览器</h2>
+    <p class="hint">会打开一个站内浏览器。在里面登录，再打开书的详情页（有目录的那一页），页面上会出现下载图标，点它开始导出。章节能否导出取决于平台提供的内容。</p>
     <div class="grid">
       <button data-site="https://www.qidian.com/">起点</button>
       <button data-site="https://www.jjwxc.net/">晋江</button>
@@ -99,8 +107,8 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
   </section>
   <section>
     <h2>要知道的事</h2>
-    <p class="hint">第一次用要下载导出工具，有十几兆，可能要等一两分钟，之后就不用了。</p>
-    <p class="hint">导出靠的是开源脚本“小说下载器”，它支持的网站都能用，规则由它的作者维护。某个网站导不出来时，多半是网站改版了，要等脚本更新。</p>
+    <p class="hint">第一次用站内浏览器导出时，要下载导出工具，有十几兆，可能要等一两分钟，之后就不用了。</p>
+    <p class="hint">站内浏览器使用开源脚本“小说下载器”，它支持的网站都能用，规则由它的作者维护。某个网站导不出来时，多半是网站改版了，要等脚本更新。</p>
     <p class="hint">一次导一本，别连着导很多，太频繁可能被网站限制。</p>
     <p class="hint">页面是电脑版的，字小可以双指放大；上面一排有“换成手机版”。</p>
   </section>
@@ -471,7 +479,7 @@ function db(){ return _db || (_db = new Promise((res,rej)=>{ const r=indexedDB.o
 const reqP = r => new Promise((res,rej)=>{ r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); });
 async function txRW(fn){ const d=await db(); return new Promise((res,rej)=>{ const t=d.transaction(["meta","text"],"readwrite"); t.oncomplete=()=>res(); t.onerror=t.onabort=()=>rej(t.error||new Error("存不进去，可能是手机空间不够")); fn(t); }); }
 async function bookList(){ const d=await db(); return (await reqP(d.transaction("meta").objectStore("meta").getAll())).sort((a,b)=>b.mtime-a.mtime); }
-async function bookAdd(name, text){ const id=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+async function bookAdd(name, text, id=Date.now().toString(36)+Math.random().toString(36).slice(2,6)){
   await txRW(t=>{ t.objectStore("meta").put({id, name, chars:text.length, mtime:Date.now()}); t.objectStore("text").put(text, id); }); return id; }
 async function bookText(id){ const d=await db(); return reqP(d.transaction("text").objectStore("text").get(id)); }
 async function bookDel(id){ await txRW(t=>{ t.objectStore("meta").delete(id); t.objectStore("text").delete(id); }); }
@@ -781,5 +789,6 @@ if (NATIVE){
 pullInbox();
 if (NATIVE && VER) checkUpdate().then(m => { if (LATEST > VER) $("updMsg").textContent = m; });
 </script>
+<script src="link-import.js"></script>
 </body>
 </html>

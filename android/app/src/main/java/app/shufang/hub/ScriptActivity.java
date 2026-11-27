@@ -185,6 +185,8 @@ public class ScriptActivity extends Activity {
         s.setBuiltInZoomControls(true);
         s.setDisplayZoomControls(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        // 导出脚本开始前会放一段无声音频防止页面休眠；默认要求"亲手点过"才能放，App 替你按的按钮不算，会直接报错
+        s.setMediaPlaybackRequiresUserGesture(false);
         mobileUa = s.getUserAgentString();
         Matcher m = Pattern.compile("Chrome/([\\d.]+)").matcher(mobileUa);
         desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + (m.find() ? m.group(1) : "130.0.0.0") + " Safari/537.36";

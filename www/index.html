@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>书房</title>
+<style>
+/* 布局: 单列内容 + 底部五个标签; 蓝/绿只用于世界书的灯 */
+:root{
+  --top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px)); --bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --bg:#eef0f4; --surface:#ffffff; --ink:#1c2230; --mute:#5f6878; --line:#d5d9e2;
+  --accent:#3d4fc4; --accent-ink:#ffffff; --blue:#2a6fe8; --green:#1f9d63; --warn:#b3261e; --ok:#1f7a4d;
+  --font:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#12151c; --surface:#1b1f29; --ink:#e7eaf1; --mute:#9aa3b5; --line:#2e3442;
+    --accent:#8793f5; --accent-ink:#10131a; --blue:#6aa0ff; --green:#4ccf93; --warn:#ff8a80; --ok:#4ccf93; color-scheme:dark; }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--font);-webkit-tap-highlight-color:transparent}
+main{max-width:680px;margin:0 auto;padding:calc(var(--top) + 14px) 14px calc(var(--bottom) + 84px);display:flex;flex-direction:column;gap:12px}
+.view{display:flex;flex-direction:column;gap:12px}
+h1{font-size:22px;margin:4px 0 0;font-weight:700}
+h2{font-size:16px;margin:0;font-weight:700}
+h2 small{font-weight:400;color:var(--mute);font-size:13px;margin-left:6px}
+section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px}
+label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mute)}
+input[type=text],input[type=password],input[type=number],input[type=search],select,textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:16px;background:var(--bg);color:var(--ink)}
+input[type=file]{font:inherit;font-size:14px;color:var(--ink);max-width:100%}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+button,.btn{font:inherit;font-size:15px;min-height:44px;padding:9px 16px;border-radius:9px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;text-align:center}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+button.small{min-height:36px;padding:5px 12px;font-size:14px}
+button:disabled{opacity:.45}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row.fill>*{flex:1 1 130px}
+.hint{font-size:13px;color:var(--mute);margin:0}
+.note{font-size:14px;margin:0;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--bg)}
+.note.warn{color:var(--warn);border-color:var(--warn)} .note.ok{color:var(--ok);border-color:var(--ok)}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+@media (prefers-reduced-motion: reduce){.bar i{transition:none}}
+pre.log{font-size:12px;line-height:1.5;color:var(--mute);max-height:150px;overflow:auto;margin:0;white-space:pre-wrap;word-break:break-all}
+.list{display:flex;flex-direction:column}
+.item{border-top:1px solid var(--line);padding:10px 0;display:flex;flex-direction:column;gap:6px}
+.item:first-child{border-top:0;padding-top:0}
+.item .t{font-size:15px;font-weight:600;overflow-wrap:anywhere}
+.item .s{font-size:13px;color:var(--mute);overflow-wrap:anywhere}
+.tag{font-size:11px;border:1px solid var(--line);color:var(--mute);border-radius:4px;padding:0 5px;margin-right:6px;white-space:nowrap;font-weight:400}
+.lamp{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;flex:none}
+.lamp.b{background:var(--blue)} .lamp.g{background:var(--green)}
+details{border-top:1px solid var(--line);padding:8px 0}
+details:first-child{border-top:0}
+summary{cursor:pointer;display:flex;align-items:center;font-size:15px}
+details p{margin:6px 0 0 18px;font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}
+details p.keys{font-size:12px;color:var(--mute)}
+#cardimg{max-width:150px;width:100%;border-radius:8px;border:1px solid var(--line);display:block}
+nav{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);display:flex;justify-content:center;padding-bottom:var(--bottom)}
+nav div{display:flex;width:100%;max-width:680px}
+nav button{flex:1;border:0;border-radius:0;min-height:58px;font-size:14px;background:transparent;color:var(--mute);padding:6px 2px}
+nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:inset 0 3px 0 var(--accent)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+<h1 id="title">搜书</h1>
+
+<!-- ============ 搜书 ============ -->
+<div class="view" id="v-search">
+  <section>
+    <label for="kw">书名或作者<input type="search" id="kw" autocomplete="off" enterkeyhint="search"></label>
+    <div class="row fill"><button class="primary" id="doSearch">搜网盘分享</button></div>
+    <p class="hint" id="searchMsg">在百度、夸克等网盘的公开分享里找别人存下来的书。</p>
+  </section>
+  <section id="panBox" hidden><h2>网盘分享<small id="panCount"></small></h2>
+    <p class="hint">点开链接，在网盘 App 里转存并下载 txt，再回到“书架”导入。链接是别人分享的，失效很常见。</p>
+    <div class="list" id="panList"></div></section>
+</div>
+
+<!-- ============ 导书 ============ -->
+<div class="view" id="v-export" hidden>
+  <p class="note">平台导书还在做，下一版放出来。现在这一页先告诉你计划和临时办法。</p>
+  <section>
+    <h2>起点、晋江<small>下一版</small></h2>
+    <p class="hint">做法：在 App 里打开网站，你自己正常登录，然后 App 在页面里运行开源的“小说下载器”脚本，导出的 txt 直接收进书架，买过的章节也在内。</p>
+    <p class="hint">在那之前：用装了油猴的手机浏览器跑同一个脚本导出 txt，再到“书架”导入。</p>
+  </section>
+  <section>
+    <h2>番茄<small>还没有确定的办法</small></h2>
+    <p class="hint">上面那个脚本不支持番茄。先用别的工具导出 txt，再到“书架”导入。</p>
+  </section>
+</div>
+
+<!-- ============ 书架 ============ -->
+<div class="view" id="v-shelf" hidden>
+  <section>
+    <label for="importFile">导入 txt（可以一次选多个）<input type="file" id="importFile" accept=".txt,text/plain" multiple></label>
+    <p class="hint" id="shelfMsg">书存在这个 App 里。卸载 App 会一起删掉，重要的书记得“存到手机”。</p>
+  </section>
+  <section><h2>我的书<small id="shelfCount"></small></h2><div class="list" id="shelfList"></div></section>
+</div>
+
+<!-- ============ 制卡 ============ -->
+<div class="view" id="v-card" hidden>
+  <section>
+    <h2>选书</h2>
+    <label for="cardBook">书架上的书<select id="cardBook"></select></label>
+    <div class="grid">
+      <label for="cardName">书名<input type="text" id="cardName" autocomplete="off"></label>
+      <label for="cardChar">做成角色卡的角色（留空则选出场最多的）<input type="text" id="cardChar" autocomplete="off"></label>
+    </div>
+    <label for="cardCover">角色卡封面图（可选）<input type="file" id="cardCover" accept="image/*"></label>
+    <details><summary>高级设置</summary>
+      <div class="grid" style="margin-top:8px">
+        <label for="cSize">每次读多少字<input type="number" id="cSize" value="20000" min="5000" max="60000" step="5000" inputmode="numeric"></label>
+        <label for="cMax">最多保留多少条设定<input type="number" id="cMax" value="60" min="5" max="200" inputmode="numeric"></label>
+        <label for="cBlue">蓝灯设定条数<input type="number" id="cBlue" value="3" min="0" max="20" inputmode="numeric"></label>
+      </div>
+    </details>
+    <p class="hint" id="cardInfo"></p>
+    <div class="row fill"><button class="primary" id="cardGo">开始生成</button></div>
+  </section>
+  <section id="cardProg" hidden>
+    <h2>进度</h2><p class="note" id="cardMsg"></p><div class="bar"><i id="cardBar"></i></div>
+    <div class="row fill"><button id="cardStop" hidden>暂停</button><button class="primary" id="cardResume" hidden>继续</button></div>
+    <pre class="log" id="cardLog"></pre>
+  </section>
+  <section id="cardRes" hidden>
+    <h2>结果</h2><p class="hint" id="cardSum"></p>
+    <img id="cardimg" alt="角色卡图片">
+    <div class="row fill"><button class="primary" id="saveCard">角色卡存到手机</button><button id="shareCard">发送角色卡</button></div>
+    <div class="row fill"><button id="saveWb">世界书存到手机</button><button id="shareWb">发送世界书</button></div>
+    <p class="hint" id="saveMsg"></p>
+    <p class="hint"><i class="lamp b"></i>蓝灯：每轮都发给模型　<i class="lamp g"></i>绿灯：聊到触发词才发</p>
+    <div class="list" id="cardList"></div>
+  </section>
+</div>
+
+<!-- ============ 密钥 ============ -->
+<div class="view" id="v-keys" hidden>
+  <p class="note">这里填的东西只保存在这台手机的 App 里。</p>
+  <section>
+    <h2>模型接口<small>制卡用，和酒馆里填的一样</small></h2>
+    <label for="k_api_base">接口地址（一般以 /v1 结尾）<input type="text" id="k_api_base" placeholder="https://……/v1" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <div class="grid">
+      <label for="k_api_key">密钥<input type="password" id="k_api_key" autocomplete="off"></label>
+      <label for="k_model">模型名<input type="text" id="k_model" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    </div>
+    <div class="row"><button class="small" id="testLlm">测试连接</button><span class="hint" id="llmMsg"></span></div>
+  </section>
+  <section>
+    <h2>网盘搜索服务</h2>
+    <label for="k_pansou">服务地址<input type="text" id="k_pansou" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <label for="k_pansou_token">口令（服务要求登录时才填）<input type="password" id="k_pansou_token" autocomplete="off"></label>
+  </section>
+  <div class="row fill"><button class="primary" id="saveKeys">保存</button></div>
+  <p class="hint" id="keysMsg"></p>
+  <section>
+    <h2>版本<small id="ver"></small></h2>
+    <div class="row fill"><button id="checkBtn">检查更新</button><button class="primary" id="updBtn" hidden>下载并安装新版本</button></div>
+    <p class="hint" id="updMsg"></p>
+  </section>
+</div>
+</main>
+
+<nav><div role="tablist">
+  <button role="tab" data-v="search" aria-selected="true">搜书</button>
+  <button role="tab" data-v="export">导书</button>
+  <button role="tab" data-v="shelf">书架</button>
+  <button role="tab" data-v="card">制卡</button>
+  <button role="tab" data-v="keys">密钥</button>
+</div></nav>
+
+<script>
+"use strict";
+const VER = 0;
+const RELEASE = "https://github.com/wsttdh666-cmd/shufang/releases/latest/download/";
+const NATIVE = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
+const $ = id => document.getElementById(id);
+const TITLES = {search:"搜书", export:"平台导书", shelf:"书架", card:"制作角色卡", keys:"密钥管理"};
+const TYPES = ["角色","地点","势力","物品","设定","事件"];
+const GENERIC = new Set("师父 师傅 师尊 师兄 师姐 师弟 师妹 少爷 公子 小姐 姑娘 老大 大哥 大姐 哥哥 姐姐 弟弟 妹妹 父亲 母亲 爹 娘 爸爸 妈妈 老师 先生 夫人 殿下 陛下 大人 主人 少主 老板 队长 前辈 道友 小子 丫头 老头 男主 女主 主角".split(" "));
+const BATCH = 12;
+const CLOUD = {baidu:"百度网盘", quark:"夸克网盘", aliyun:"阿里云盘", uc:"UC 网盘", xunlei:"迅雷网盘", tianyi:"天翼云盘", mobile:"移动云盘", "115":"115 网盘", "123":"123 网盘", pikpak:"PikPak", magnet:"磁力", ed2k:"电驴", guangya:"光鸭", others:"其他"};
+
+function el(tag, cls, text){ const e=document.createElement(tag); if(cls) e.className=cls; if(text!==undefined) e.textContent=text; return e; }
+
+/* ---------- 提示词 ---------- */
+const P_EXTRACT = `你是小说设定整理助手。阅读下面的小说片段，提炼对角色扮演有用的设定资料。
+所有内容必须用你自己的话概括，不要照抄或拼接原文句子。
+
+最多提取 15 条，宁缺毋滥，路人和只出现一次的东西不要。
+只回复 JSON，格式：
+{"entries":[{"name":"正式名称","type":"角色|地点|势力|物品|设定|事件","aliases":["别名"],"summary":"概括"}]}
+
+要求：
+- name 用最正式、最完整的名字；aliases 只填专属的别名、外号、化名，不要填“师父”“少爷”这类通用称呼
+- type 为“设定”指世界观规则：力量体系、等级划分、社会制度、特殊概念
+- summary 不超过 120 字，客观第三人称，写清楚是谁或是什么、特征、与他人的关系、在这一段里的关键变化
+
+小说片段：
+<<<
+`;
+const P_MERGE = `你是小说设定整理助手。下面是若干设定各自的零散笔记（JSON，notes 按故事先后排列）。
+请把每个设定的笔记整合成一条世界书条目，用自己的话写，不要照抄原文。
+
+要求：客观第三人称；去掉重复；互相矛盾时以靠后的笔记为准；角色不超过 300 字，写清身份、外貌与性格、能力、重要关系、关键经历；其他类型不超过 200 字。
+只回复 JSON，格式：{"items":[{"name":"与输入完全相同的 name","content":"整合后的条目"}]}
+
+输入：
+`;
+function cardPrompt(book, who, material){
+  return `你是 SillyTavern 角色卡作者。请根据下面的设定资料写一张角色卡。所有文字必须原创，用自己的话写，不要复述或照抄小说原文。
+
+小说名：${book}
+要做成角色卡的角色：${who}
+
+设定资料：
+${material}
+
+只回复 JSON，格式：
+{"char_name":"角色名","world_overview":"世界观总纲，300 字以内：时代背景、力量体系、主要势力格局","description":"角色描述，400 字以内：身份、外貌、能力、背景、重要关系","personality":"性格要点，80 字以内","scenario":"与 {{user}} 相遇时的情境，100 字以内","first_mes":"角色的开场白，150 字左右，一个原创的新场景，动作描写用 *星号* 包裹，称呼对方用 {{user}}","tags":["3 到 6 个标签"]}`;
+}
+
+/* ---------- 文本 ---------- */
+function decode(buf){
+  const u = new Uint8Array(buf);
+  if (u[0]===0xFF && u[1]===0xFE) return new TextDecoder("utf-16le").decode(u);
+  if (u[0]===0xFE && u[1]===0xFF) return new TextDecoder("utf-16be").decode(u);
+  try { return new TextDecoder("utf-8",{fatal:true}).decode(u); } catch(e){}
+  try { return new TextDecoder("gb18030").decode(u); } catch(e){ return new TextDecoder().decode(u); }
+}
+const CHAPTER = /^[ \t　]*(?:第[0-9０-９零〇一二两三四五六七八九十百千万]+[章节回卷集部篇话][^\n]{0,40}|Chapter\s+\d+[^\n]{0,40}|(?:序章|楔子|引子|序言|前言|尾声|终章|后记|番外)[^\n]{0,40})[ \t]*$/gmi;
+function splitChunks(text, size){
+  text = text.replace(/﻿/g,"").replace(/\r\n?/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+  const cuts = [0]; let m; CHAPTER.lastIndex = 0; let chapters = 0;
+  while ((m = CHAPTER.exec(text))) { chapters++; if (m.index>0) cuts.push(m.index); }
+  cuts.push(text.length);
+  const pieces = [];
+  for (let i=0;i<cuts.length-1;i++){
+    let p = text.slice(cuts[i],cuts[i+1]);
+    while (p.length > size){
+      let cut = p.lastIndexOf("\n", size); if (cut < size*0.6) cut = size;
+      pieces.push(p.slice(0,cut)); p = p.slice(cut);
+    }
+    if (p.trim()) pieces.push(p);
+  }
+  const chunks = []; let buf = "";
+  for (const p of pieces){ if (buf && buf.length+p.length>size){ chunks.push(buf); buf=""; } buf += p; }
+  if (buf.trim()) chunks.push(buf);
+  return {chunks, chapters, length:text.length};
+}
+
+/* ---------- 合并同一事物 ---------- */
+function mergeEntities(perChunk){
+  const parent = new Map();
+  const find = x => { if(!parent.has(x)) parent.set(x,x); while(parent.get(x)!==x){ parent.set(x,parent.get(parent.get(x))); x=parent.get(x);} return x; };
+  const recs = [];
+  perChunk.forEach((entries, idx) => {
+    for (const e of (Array.isArray(entries)?entries:[])){
+      if (!e || typeof e!=="object") continue;
+      const name = String(e.name||"").trim(), summary = String(e.summary||"").trim();
+      if (!name || !summary || name.length>20) continue;
+      let raw = e.aliases||[]; if (typeof raw==="string") raw = raw.split(/[、,，\/]/);
+      const aliases = [];
+      for (let a of (Array.isArray(raw)?raw:[])){ a = String(a).trim(); if (a.length>=2 && a.length<=12 && !GENERIC.has(a) && a!==name) aliases.push(a); }
+      const type = TYPES.includes(e.type) ? e.type : "设定";
+      recs.push({idx,name,type,aliases,summary});
+      find(name); for (const a of aliases) parent.set(find(a), find(name));
+    }
+  });
+  const groups = new Map();
+  for (const r of recs){
+    const k = find(r.name);
+    if (!groups.has(k)) groups.set(k,{names:new Map(),types:new Map(),aliases:new Set(),notes:[]});
+    const g = groups.get(k);
+    g.names.set(r.name,(g.names.get(r.name)||0)+1); g.types.set(r.type,(g.types.get(r.type)||0)+1);
+    r.aliases.forEach(a=>g.aliases.add(a)); g.notes.push([r.idx,r.summary]);
+  }
+  const top = m => [...m.entries()].sort((a,b)=>b[1]-a[1])[0][0];
+  const out = [];
+  for (const g of groups.values()){
+    const name = top(g.names);
+    const others = new Set([...g.names.keys(), ...g.aliases]); others.delete(name);
+    out.push({name, type:top(g.types), keys:[name, ...[...others].sort((a,b)=>a.length-b.length)].slice(0,10),
+      notes:g.notes.sort((a,b)=>a[0]-b[0]).map(x=>x[1]), count:g.notes.length, content:null});
+  }
+  return out.sort((a,b)=>b.count-a.count);
+}
+
+/* ---------- 酒馆格式 ---------- */
+function wiEntry(uid, comment, keys, content, constant, order){
+  return {uid, key: constant?[]:keys, keysecondary:[], comment, content, constant, vectorized:false, selective:true, selectiveLogic:0,
+    addMemo:true, order, position: constant?0:1, disable:false, excludeRecursion:false, preventRecursion:false, delayUntilRecursion:false,
+    probability:100, useProbability:true, depth:4, group:"", groupOverride:false, groupWeight:100, scanDepth:null, caseSensitive:null,
+    matchWholeWords:null, useGroupScoring:null, automationId:"", role:null, sticky:0, cooldown:0, delay:0, displayIndex:uid};
+}
+function bookEntry(e){
+  return {id:e.uid, keys:e.key, secondary_keys:[], comment:e.comment, content:e.content, constant:e.constant, selective:true,
+    insertion_order:e.order, enabled:true, position: e.position===0?"before_char":"after_char", use_regex:false,
+    extensions:{position:e.position, exclude_recursion:false, display_index:e.uid, probability:100, useProbability:true, depth:4,
+      selectiveLogic:0, group:"", group_override:false, group_weight:100, prevent_recursion:false, delay_until_recursion:false,
+      scan_depth:null, match_whole_words:null, use_group_scoring:false, case_sensitive:null, automation_id:"", role:0,
+      vectorized:false, sticky:0, cooldown:0, delay:0}};
+}
+function buildCard(card, entries, book){
+  const data = {name:card.char_name, description:card.description, personality:card.personality, scenario:card.scenario,
+    first_mes:card.first_mes, mes_example:"", creator_notes:"由“小说转酒馆卡”根据《"+book+"》自动整理，仅供个人使用。",
+    system_prompt:"", post_history_instructions:"", alternate_greetings:[], tags:card.tags, creator:"", character_version:"1.0",
+    extensions:{world:book, depth_prompt:{prompt:"",depth:4,role:"system"}},
+    character_book:{name:book, description:"", scan_depth:4, token_budget:2048, recursive_scanning:false, extensions:{}, entries:entries.map(bookEntry)}};
+  const now = Math.floor(Date.now()/1000);
+  return {v2:{spec:"chara_card_v2",spec_version:"2.0",data},
+          v3:{spec:"chara_card_v3",spec_version:"3.0",data:Object.assign({},data,{group_only_greetings:[],creation_date:now,modification_date:now})}};
+}
+
+/* ---------- PNG: 把卡数据写进 tEXt 块 ---------- */
+const CRC_T = (()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
+function crc32(b){let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=CRC_T[(c^b[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+function b64utf8(s){const b=new TextEncoder().encode(s);let o="";for(let i=0;i<b.length;i+=0x8000)o+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));return btoa(o);}
+function pngChunk(type, data){
+  const out=new Uint8Array(12+data.length), dv=new DataView(out.buffer);
+  dv.setUint32(0,data.length); for(let i=0;i<4;i++)out[4+i]=type.charCodeAt(i); out.set(data,8);
+  dv.setUint32(8+data.length, crc32(out.subarray(4,8+data.length))); return out;
+}
+function textChunk(keyword, value){
+  const k=new TextEncoder().encode(keyword), v=new TextEncoder().encode(value), d=new Uint8Array(k.length+1+v.length);
+  d.set(k,0); d.set(v,k.length+1); return pngChunk("tEXt", d);
+}
+function embedCard(png, v2, v3){
+  const dv=new DataView(png.buffer, png.byteOffset, png.byteLength), parts=[png.subarray(0,8)]; let pos=8;
+  while (pos+8 <= png.length){
+    const len=dv.getUint32(pos), type=String.fromCharCode(png[pos+4],png[pos+5],png[pos+6],png[pos+7]);
+    const whole=png.subarray(pos, pos+12+len); pos+=12+len;
+    if (type==="tEXt"){ const d=whole.subarray(8,8+len); const z=d.indexOf(0); const kw=new TextDecoder().decode(d.subarray(0,z)); if(kw==="chara"||kw==="ccv3") continue; }
+    if (type==="IEND"){ parts.push(textChunk("chara",b64utf8(JSON.stringify(v2))), textChunk("ccv3",b64utf8(JSON.stringify(v3))), whole); break; }
+    parts.push(whole);
+  }
+  return new Blob(parts,{type:"image/png"});
+}
+function canvasPng(draw, w, h){
+  return new Promise((res,rej)=>{ const c=document.createElement("canvas"); c.width=w; c.height=h; draw(c.getContext("2d"),w,h);
+    c.toBlob(b=> b? b.arrayBuffer().then(a=>res(new Uint8Array(a))) : rej(new Error("图片生成失败")), "image/png"); });
+}
+function placeholderPng(name){
+  return canvasPng((g,w,h)=>{ const gr=g.createLinearGradient(0,0,w,h); gr.addColorStop(0,"#2b3270"); gr.addColorStop(1,"#5b3f7a"); g.fillStyle=gr; g.fillRect(0,0,w,h);
+    g.fillStyle="rgba(255,255,255,.92)"; g.textAlign="center"; g.textBaseline="middle"; g.font="700 44px sans-serif"; g.fillText(name.slice(0,8), w/2, h/2); }, 400, 600);
+}
+function coverPng(file){
+  return new Promise((res,rej)=>{ const img=new Image(), url=URL.createObjectURL(file);
+    img.onload=()=>{ const s=Math.min(1,1024/Math.max(img.width,img.height)); const w=Math.max(1,Math.round(img.width*s)), h=Math.max(1,Math.round(img.height*s));
+      canvasPng(g=>g.drawImage(img,0,0,w,h), w, h).then(res,rej).finally(()=>URL.revokeObjectURL(url)); };
+    img.onerror=()=>{ URL.revokeObjectURL(url); rej(new Error("封面图读不出来")); }; img.src=url; });
+}
+
+/* ---------- 本机缓存: 读过的块不重复花用量 ---------- */
+function hash(s){let h=0x811c9dc5;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,0x01000193);}return (h>>>0).toString(36)+"-"+s.length;}
+function cacheGet(k){try{const v=localStorage.getItem("n2c:"+k);return v?JSON.parse(v):null;}catch(e){return null;}}
+function cacheSet(k,v){try{localStorage.setItem("n2c:"+k,JSON.stringify(v));}catch(e){}}
+
+/* ---------- 设置 ---------- */
+const CFG_KEYS = ["api_base","api_key","model","pansou","pansou_token"];
+let CFG = {api_base:"", api_key:"", model:"", pansou:"https://so.252035.xyz", pansou_token:""};
+try { Object.assign(CFG, JSON.parse(localStorage.getItem("sf:cfg") || "{}")); } catch(e){}
+function saveCfg(){ for (const k of CFG_KEYS) CFG[k] = $("k_"+k).value.trim(); try{ localStorage.setItem("sf:cfg", JSON.stringify(CFG)); }catch(e){} }
+for (const k of CFG_KEYS) $("k_"+k).value = CFG[k] || "";
+
+/* ---------- 联网: App 里走原生请求(不受跨域限制, 可设超时), 浏览器里走 fetch ---------- */
+async function http(url, {method="GET", headers={}, json, timeout=60000} = {}){
+  const h = json !== undefined ? Object.assign({"Content-Type":"application/json"}, headers) : headers;
+  if (NATIVE){
+    let r;
+    try { r = await Capacitor.nativePromise("CapacitorHttp", "request", {url, method, headers:h, data:json, connectTimeout:30000, readTimeout:timeout}); }
+    catch(e){ throw {code:"network", detail:String((e && e.message) || e)}; }
+    let data = r.data; if (typeof data === "string"){ try{ data = JSON.parse(data); }catch(e){} }
+    return {status:r.status, data};
+  }
+  let r;
+  try { r = await fetch(url, {method, headers:h, body: json !== undefined ? JSON.stringify(json) : undefined}); }
+  catch(e){ throw {code:"network", detail:String(e)}; }
+  const t = await r.text(); let data = t; try{ data = JSON.parse(t); }catch(e){}
+  return {status:r.status, data};
+}
+const ERR = {
+  rate_limited:"接口说太频繁或额度用完了。等一会儿再点“继续”，读过的不会重来。",
+  upstream_error:"接口那边出错了。点“继续”再试。",
+  auth:"接口不认这个密钥。到“密钥”里检查密钥和模型名。",
+  notfound:"接口地址或模型名不对。到“密钥”里改。",
+  network:"连不上。检查网络和地址。",
+  cancelled:"已暂停。点“继续”接着来。",
+  nokey:"还没填模型接口。到“密钥”里填好并测试。"
+};
+function parseJson(s){
+  s = String(s).replace(/<think>[\s\S]*?<\/think>/g,"").trim();
+  const f = s.match(/```(?:json)?\s*([\s\S]*?)```/); if (f) s = f[1].trim();
+  try { return JSON.parse(s); } catch(e){}
+  const a = s.search(/[\[{]/), b = Math.max(s.lastIndexOf("}"), s.lastIndexOf("]"));
+  if (a<0 || b<=a) throw {code:"invalid_json"};
+  try { return JSON.parse(s.slice(a,b+1)); } catch(e){ throw {code:"invalid_json"}; }
+}
+async function apiText(prompt){
+  const base = CFG.api_base.replace(/\/+$/,"");
+  if (!base || !CFG.api_key || !CFG.model) throw {code:"nokey"};
+  const url = /\/chat\/completions$/.test(base) ? base : base + "/chat/completions";
+  const r = await http(url, {method:"POST", timeout:300000, headers:{Authorization:"Bearer "+CFG.api_key},
+    json:{model:CFG.model, temperature:0.4, messages:[{role:"user", content:prompt}]}});
+  if (r.status < 200 || r.status >= 300){
+    const d = typeof r.data === "string" ? r.data : JSON.stringify(r.data);
+    throw {code: r.status===429?"rate_limited" : (r.status===401||r.status===403)?"auth" : r.status===404?"notfound" : "upstream_error", detail:"HTTP "+r.status+" "+String(d).slice(0,200)};
+  }
+  const j = r.data, t = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+  if (!t || !String(t).trim()) throw {code:"empty_completion"};
+  return String(t);
+}
+
+/* ---------- 文件: 存到手机 / 发给别的 App ---------- */
+const MIME = {txt:"text/plain", json:"application/json", png:"image/png"};
+const safe = s => String(s).replace(/[\\/:*?"<>|\s]+/g,"_").slice(0,60) || "未命名";
+function blobB64(blob){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(",")[1]); r.onerror=()=>rej(r.error); r.readAsDataURL(blob); }); }
+async function fileOut(action, name, data){   // data: 字符串 或 Blob
+  const mime = MIME[name.split(".").pop()] || "application/octet-stream";
+  if (!NATIVE){
+    const blob = typeof data === "string" ? new Blob([data], {type:mime}) : data;
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove();
+    return "已下载 "+name;
+  }
+  const arg = {name, mime}; if (typeof data === "string") arg.text = data; else arg.base64 = await blobB64(data);
+  if (action === "share"){ await Capacitor.nativePromise("AppTools", "share", arg); return ""; }
+  const r = await Capacitor.nativePromise("AppTools", "save", arg);
+  return "已存到 "+r.where;
+}
+function openUrl(url){ if (NATIVE) Capacitor.nativePromise("AppTools","open",{url}).catch(()=>{}); else window.open(url, "_blank", "noopener"); }
+
+/* ---------- 书架: 存在 App 自己的数据库里 ---------- */
+let _db;
+function db(){ return _db || (_db = new Promise((res,rej)=>{ const r=indexedDB.open("shufang",1);
+  r.onupgradeneeded=()=>{ r.result.createObjectStore("meta",{keyPath:"id"}); r.result.createObjectStore("text"); };
+  r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); })); }
+const reqP = r => new Promise((res,rej)=>{ r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); });
+async function txRW(fn){ const d=await db(); return new Promise((res,rej)=>{ const t=d.transaction(["meta","text"],"readwrite"); t.oncomplete=()=>res(); t.onerror=t.onabort=()=>rej(t.error||new Error("存不进去，可能是手机空间不够")); fn(t); }); }
+async function bookList(){ const d=await db(); return (await reqP(d.transaction("meta").objectStore("meta").getAll())).sort((a,b)=>b.mtime-a.mtime); }
+async function bookAdd(name, text){ const id=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  await txRW(t=>{ t.objectStore("meta").put({id, name, chars:text.length, mtime:Date.now()}); t.objectStore("text").put(text, id); }); return id; }
+async function bookText(id){ const d=await db(); return reqP(d.transaction("text").objectStore("text").get(id)); }
+async function bookDel(id){ await txRW(t=>{ t.objectStore("meta").delete(id); t.objectStore("text").delete(id); }); }
+const fmtChars = n => n >= 10000 ? (n/10000).toFixed(1)+" 万字" : n+" 字";
+let BOOKS = [];
+
+async function loadBooks(){
+  try { BOOKS = await bookList(); } catch(e){ $("shelfMsg").textContent = "书架打不开："+(e.message||e); return; }
+  $("shelfCount").textContent = BOOKS.length+" 本"; const box=$("shelfList"); box.textContent="";
+  if (!BOOKS.length) box.append(el("p","hint","书架还是空的。在上面导入 txt，或者先去搜书。"));
+  for (const b of BOOKS){
+    const d=el("div","item"); d.append(el("div","t",b.name), el("div","s",fmtChars(b.chars)+" · "+new Date(b.mtime).toLocaleDateString()));
+    const row=el("div","row"), mk=el("button","small primary","做角色卡"), sv=el("button","small","存到手机"), sh=el("button","small","发送"), del=el("button","small","删除");
+    mk.onclick = () => { show("card"); $("cardBook").value=b.id; $("cardName").value=b.name; cardInfo(); };
+    const out = act => async () => { try{ const m = await fileOut(act, safe(b.name)+".txt", await bookText(b.id)); if (m) $("shelfMsg").textContent = m; }catch(e){ $("shelfMsg").textContent = "没成功："+(e.message||e); } };
+    sv.onclick = out("save"); sh.onclick = out("share");
+    del.onclick = async () => { if (del.dataset.sure!=="1"){ del.dataset.sure="1"; del.textContent="再点一次确认删除"; return; } await bookDel(b.id); loadBooks(); };
+    row.append(mk, sv, sh, del); d.append(row); box.append(d);
+  }
+  const sel=$("cardBook"), cur=sel.value; sel.textContent="";
+  if (!BOOKS.length){ const o=el("option",null,"书架是空的，先去导入"); o.value=""; sel.append(o); }
+  for (const b of BOOKS){ const o=el("option",null,b.name); o.value=b.id; sel.append(o); }
+  if (cur && BOOKS.some(b=>b.id===cur)) sel.value=cur; else if (BOOKS.length) $("cardName").value = BOOKS[0].name;
+  cardInfo();
+}
+$("importFile").onchange = async ev => {
+  const files=[...ev.target.files]; let ok=0;
+  for (const f of files){ $("shelfMsg").textContent="正在导入 "+f.name+"…";
+    try{ const text = decode(await f.arrayBuffer()); if (!text.trim()) throw new Error("文件是空的"); await bookAdd(f.name.replace(/\.txt$/i,""), text); ok++; }
+    catch(e){ $("shelfMsg").textContent = f.name+" 导入失败："+(e.message||e); } }
+  if (ok) $("shelfMsg").textContent = "导入了 "+ok+" 本。"; ev.target.value=""; loadBooks();
+};
+$("cardBook").onchange = () => { const b=BOOKS.find(x=>x.id===$("cardBook").value); if (b) $("cardName").value=b.name; cardInfo(); };
+function cardInfo(){
+  const b=BOOKS.find(x=>x.id===$("cardBook").value); if (!b){ $("cardInfo").textContent=""; return; }
+  const n = Math.ceil(b.chars/(+$("cSize").value||20000));
+  $("cardInfo").textContent = fmtChars(b.chars)+"，大约要调用模型 "+(n+Math.ceil((+$("cMax").value||60)/BATCH)+1)+" 次。第一次建议先拿一本短的试。";
+}
+$("cSize").oninput = $("cMax").oninput = cardInfo;
+
+/* ---------- 标签切换 ---------- */
+function show(v){
+  for (const b of document.querySelectorAll("nav button")){ const on = b.dataset.v===v; b.setAttribute("aria-selected", on); $("v-"+b.dataset.v).hidden = !on; }
+  $("title").textContent = TITLES[v]; window.scrollTo(0,0);
+  if (v==="shelf" || v==="card") loadBooks();
+}
+for (const b of document.querySelectorAll("nav button")) b.onclick = () => show(b.dataset.v);
+
+/* ---------- 搜书 ---------- */
+async function doSearch(){
+  const kw=$("kw").value.trim(); if (!kw){ $("searchMsg").textContent="先输入书名或作者。"; return; }
+  const base=CFG.pansou.replace(/\/+$/,""); if (!base){ $("searchMsg").textContent="还没填网盘搜索服务的地址，到“密钥”里填。"; return; }
+  $("doSearch").disabled=true; $("panBox").hidden=true; $("searchMsg").textContent="搜索中，可能要等十几秒…";
+  try{
+    const r = await http(base+"/api/search?res=merge&kw="+encodeURIComponent(kw), {timeout:60000, headers: CFG.pansou_token ? {Authorization:"Bearer "+CFG.pansou_token} : {}});
+    if (r.status===401 || r.status===403) throw new Error("这个搜索服务要口令。到“密钥”里填口令，或换一个服务地址。");
+    if (r.status < 200 || r.status >= 300 || typeof r.data !== "object") throw new Error("搜索服务出错了（HTTP "+r.status+"）。");
+    const body = (r.data.data && typeof r.data.data === "object") ? r.data.data : r.data, merged = body.merged_by_type || {}, items=[];
+    for (const type in merged) for (const l of (merged[type]||[])){
+      if (!l || !/^(https?:\/\/|magnet:|ed2k:)/.test(String(l.url||""))) continue;
+      items.push({type, url:String(l.url), password:String(l.password||""), note:String(l.note||"").trim().slice(0,200), date:String(l.datetime||"").slice(0,10)});
+    }
+    const order = {quark:0, baidu:1};
+    items.sort((a,b)=> ((order[a.type]??5)-(order[b.type]??5)) || (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    renderPan(items.slice(0,200)); $("searchMsg").textContent="搜完了。";
+  }catch(e){ $("searchMsg").textContent = e.code==="network" ? "连不上网盘搜索服务。检查网络，或到“密钥”里换一个服务地址。" : (e.message||"搜索失败。"); }
+  $("doSearch").disabled=false;
+}
+function renderPan(items){
+  $("panBox").hidden=false; $("panCount").textContent=items.length+" 条"; const box=$("panList"); box.textContent="";
+  if (!items.length) box.append(el("p","hint","没搜到。换个关键词，比如只搜书名或只搜作者。"));
+  for (const it of items){
+    const d=el("div","item"), t=el("div","t"); t.append(el("span","tag",CLOUD[it.type]||it.type), document.createTextNode(it.note||"(没有说明)")); d.append(t);
+    d.append(el("div","s",[it.date, it.password?"提取码 "+it.password:""].filter(Boolean).join(" · ")));
+    const row=el("div","row");
+    if (/^https?:\/\//.test(it.url)){ const a=el("button","small primary","打开链接"); a.onclick=()=>openUrl(it.url); row.append(a); }
+    const c=el("button","small", it.password?"复制提取码":"复制链接");
+    c.onclick = async () => { try{ await navigator.clipboard.writeText(it.password||it.url); c.textContent="已复制"; }catch(e){ c.textContent=it.password||"复制失败"; } };
+    row.append(c); d.append(row); box.append(d);
+  }
+}
+$("doSearch").onclick = doSearch;
+$("kw").onkeydown = e => { if (e.key==="Enter") doSearch(); };
+
+/* ---------- 制卡 ---------- */
+const S = {name:"", chunks:[], res:[], ents:null, card:null, skipped:0, running:false, stop:false, built:null, coverFile:null};
+const SKIP = new Set(["empty_completion","invalid_json"]);
+function log(t){ const e=$("cardLog"); e.textContent += (e.textContent?"\n":"") + new Date().toTimeString().slice(0,8)+" "+t; e.scrollTop=e.scrollHeight; }
+function setMsg(t, warn){ $("cardMsg").textContent=t; $("cardMsg").className="note"+(warn?" warn":""); }
+function total(){ return S.chunks.length + Math.ceil((S.ents?S.ents.length:(+$("cMax").value||60))/BATCH) + 1; }
+function progress(done){ $("cardBar").style.width = Math.min(100,Math.round(100*done/total()))+"%"; }
+function cardUi(){ $("cardGo").disabled=S.running; $("cardStop").hidden=!S.running; $("cardResume").hidden = S.running || !S.chunks.length || !!S.built; }
+const ask = async prompt => parseJson(await apiText(prompt));
+$("cardCover").onchange = ev => { S.coverFile = ev.target.files[0] || null; };
+
+async function cardStart(){
+  const id=$("cardBook").value; $("cardProg").hidden=false; $("cardRes").hidden=true; $("cardLog").textContent=""; $("cardBar").style.width="0%";
+  if (!id){ setMsg("先从书架选一本书。", true); return; }
+  if (!CFG.api_base || !CFG.api_key || !CFG.model){ setMsg(ERR.nokey, true); return; }
+  const text = await bookText(id); if (!text){ setMsg("这本书读不出来，重新导入一次。", true); return; }
+  const r = splitChunks(text, Math.max(5000, Math.min(60000, +$("cSize").value||20000)));
+  Object.assign(S, {name:$("cardName").value.trim()||"未命名", chunks:r.chunks, res:new Array(r.chunks.length).fill(null), ents:null, card:null, skipped:0, stop:false, built:null});
+  log("全文 "+r.length.toLocaleString()+" 字，"+r.chapters+" 章，分成 "+r.chunks.length+" 块");
+  cardRun();
+}
+async function cardRun(){
+  if (S.running) return; S.running=true; S.stop=false; cardUi();
+  try{
+    const n=S.chunks.length; if (!n) throw {code:"empty", message:"这本书里没有读到文字。"};
+    for (let i=0;i<n;i++){
+      if (S.stop) throw {code:"cancelled"};
+      if (!S.res[i]){
+        const k = hash(CFG.model+"|"+S.chunks[i]), c = cacheGet(k);
+        if (c) S.res[i]=c;
+        else {
+          setMsg("正在读第 "+(i+1)+" / "+n+" 块");
+          try{ const v = await ask(P_EXTRACT + S.chunks[i] + "\n>>>"); const arr = Array.isArray(v) ? v : (v && v.entries);
+            if (!Array.isArray(arr)) throw {code:"invalid_json"}; S.res[i]=arr; cacheSet(k,arr); }
+          catch(e){ if (!SKIP.has(e && e.code)) throw e; S.res[i]=[]; S.skipped++; log("第 "+(i+1)+" 块没读成，已跳过（返回的格式不对）"); }
+        }
+      }
+      progress(i+1);
+    }
+    if (S.skipped===n) throw {code:"empty", message:"每一块都没读成，没法继续。换个模型试试。"};
+    if (!S.ents){
+      const all = mergeEntities(S.res); S.ents = all.slice(0, Math.max(5, Math.min(200, +$("cMax").value||60)));
+      for (const e of S.ents) if (e.notes.length===1) e.content=e.notes[0];
+      log("合并后共 "+all.length+" 个设定，保留出现最多的 "+S.ents.length+" 个");
+      if (!S.ents.length) throw {code:"empty", message:"没有提取到任何设定。"};
+    }
+    const todo = S.ents.filter(e=>e.content===null);
+    for (let b=0;b<todo.length;b+=BATCH){
+      if (S.stop) throw {code:"cancelled"};
+      const batch = todo.slice(b,b+BATCH).filter(e=>e.content===null); if (!batch.length) continue;
+      setMsg("正在整合设定："+batch[0].name+" 等 "+batch.length+" 条");
+      const input = batch.map(e=>{ let ns=e.notes; if(ns.length>20){ const st=ns.length/20; ns=Array.from({length:20},(_,k)=>ns[Math.floor(k*st)]); } return {name:e.name, type:e.type, notes:ns.map(x=>x.slice(0,160))}; });
+      let got=null;
+      try{ const v = await ask(P_MERGE + JSON.stringify(input)); got = Array.isArray(v) ? v : (v && v.items); }
+      catch(e){ if (!SKIP.has(e && e.code)) throw e; log("这一批整合失败，改用原始笔记"); }
+      const map = new Map((Array.isArray(got)?got:[]).filter(x=>x&&x.name&&x.content).map(x=>[String(x.name), String(x.content).trim()]));
+      for (const e of batch) e.content = map.get(e.name) || e.notes.slice(0,4).join(" ");
+      progress(n + Math.ceil((b+BATCH)/BATCH));
+    }
+    const chars = S.ents.filter(e=>e.type==="角色");
+    const want = $("cardChar").value.trim() || (chars[0]||S.ents[0]).name;
+    const hit = S.ents.find(e=>e.keys.includes(want)) || null;
+    if (!S.card){
+      if (S.stop) throw {code:"cancelled"};
+      setMsg("正在写角色卡："+want);
+      const pick = S.ents.slice(0,30); if (hit && !pick.includes(hit)) pick.push(hit);
+      const c = await ask(cardPrompt(S.name, want, pick.map(e=>"【"+e.name+"｜"+e.type+"】"+e.content.slice(0,400)).join("\n")));
+      if (!c || typeof c!=="object" || Array.isArray(c)) throw {code:"invalid_json"};
+      const card = {}; for (const k of ["char_name","world_overview","description","personality","scenario","first_mes"]) card[k]=String(c[k]||"").trim();
+      card.char_name = card.char_name || want; card.tags = Array.isArray(c.tags) ? c.tags.map(String).slice(0,8) : [];
+      S.card = card;
+    }
+    let uid=0, blueLeft=Math.max(0, Math.min(20, +$("cBlue").value||0));
+    const entries=[wiEntry(0,"世界观总纲",[],S.card.world_overview,true,100)];
+    for (const e of S.ents){ if (e===hit) continue; const blue = e.type==="设定" && blueLeft>0; if (blue) blueLeft--;
+      uid++; entries.push(wiEntry(uid, e.type+"|"+e.name, e.keys, "【"+e.name+"】"+e.content, blue, blue?90:50)); }
+    const {v2,v3} = buildCard(S.card, entries, S.name);
+    let base;
+    try{ base = S.coverFile ? await coverPng(S.coverFile) : await placeholderPng(S.card.char_name); }
+    catch(e){ log("封面图用不了，改用默认图"); base = await placeholderPng(S.card.char_name); }
+    S.built = {png:embedCard(base, v2, v3), wb:JSON.stringify({entries:Object.fromEntries(entries.map(e=>[String(e.uid),e]))}, null, 2), char:S.card.char_name};
+    const nb = entries.filter(e=>e.constant).length;
+    progress(total()); setMsg("完成"); log("完成：蓝灯 "+nb+" 条，绿灯 "+(entries.length-nb)+" 条");
+    $("cardSum").textContent = "角色卡："+S.card.char_name+"。蓝灯 "+nb+" 条，绿灯 "+(entries.length-nb)+" 条"+(S.skipped?"。有 "+S.skipped+" 块没读成被跳过":"")+"。内容是模型的概括，导入酒馆后建议自己过一遍。";
+    const box=$("cardList"); box.textContent="";
+    for (const e of entries){ const d=el("details"), m=el("summary"); m.append(el("i","lamp "+(e.constant?"b":"g")), document.createTextNode(e.comment)); d.append(m);
+      if (!e.constant) d.append(el("p","keys","触发词："+e.key.join("、"))); d.append(el("p",null,e.content)); box.append(d); }
+    $("cardimg").src = URL.createObjectURL(S.built.png); $("saveMsg").textContent=""; $("cardRes").hidden=false;
+    $("cardRes").scrollIntoView({block:"start"});
+  }catch(e){
+    const code = e && e.code;
+    if (code==="invalid_json") setMsg("角色卡这一步返回的格式不对。点“继续”再试一次。", true);
+    else setMsg(ERR[code] || (e && e.message) || "出错了，点“继续”再试。", code!=="cancelled");
+    if (code && code!=="cancelled") log("停在这里："+code+(e.detail?"　"+e.detail:""));
+  }finally{ S.running=false; cardUi(); }
+}
+$("cardGo").onclick = cardStart;
+$("cardResume").onclick = cardRun;
+$("cardStop").onclick = () => { S.stop=true; setMsg("这一块读完就暂停…"); };
+const outBtn = (id, act, get) => { $(id).onclick = async () => { if (!S.built) return; const [name, data] = get();
+  try{ const m = await fileOut(act, name, data); if (m) $("saveMsg").textContent = m; }catch(e){ $("saveMsg").textContent = "没成功："+(e.message||e); } }; };
+outBtn("saveCard","save", () => [safe(S.built.char)+"_角色卡.png", S.built.png]);
+outBtn("shareCard","share", () => [safe(S.built.char)+"_角色卡.png", S.built.png]);
+outBtn("saveWb","save", () => [safe(S.name)+"_世界书.json", S.built.wb]);
+outBtn("shareWb","share", () => [safe(S.name)+"_世界书.json", S.built.wb]);
+
+/* ---------- 密钥 ---------- */
+$("saveKeys").onclick = () => { saveCfg(); $("keysMsg").textContent="已保存。"; };
+$("testLlm").onclick = async () => { saveCfg(); $("llmMsg").textContent="测试中…";
+  try{ const t = await apiText("请只回复两个字：正常"); $("llmMsg").textContent="连接成功，模型回复："+t.trim().slice(0,30); }
+  catch(e){ $("llmMsg").textContent = (ERR[e.code]||"连接失败。")+(e.detail?"（"+e.detail+"）":""); } };
+
+/* ---------- 更新 ---------- */
+$("ver").textContent = VER ? "第 "+VER+" 版" : "测试版";
+let LATEST = 0;
+async function checkUpdate(){
+  try{ const r = await http(RELEASE+"version.txt", {timeout:20000}); LATEST = Number(String(r.data).trim());
+    if (!(LATEST > 0)) return "检查失败，可能是连不上 GitHub。";
+    $("updBtn").hidden = !(LATEST > VER); return LATEST > VER ? "有新版本：第 "+LATEST+" 版。" : "已经是最新。"; }
+  catch(e){ return "检查失败，可能是连不上 GitHub。"; }
+}
+$("checkBtn").onclick = async () => { $("checkBtn").disabled=true; $("updMsg").textContent="检查中…"; $("updMsg").textContent = await checkUpdate(); $("checkBtn").disabled=false; };
+$("updBtn").onclick = async () => {
+  if (!NATIVE){ openUrl(RELEASE+"shufang.apk"); return; }
+  const btn=$("updBtn"); btn.disabled=true; btn.textContent="下载中…";
+  const sub = Capacitor.addListener("AppTools", "progress", p => { btn.textContent = "下载中 "+(p.total>0 ? Math.floor(p.done*100/p.total)+"%" : (p.done/1048576).toFixed(1)+"M"); });
+  try{ await Capacitor.nativePromise("AppTools", "install", {url:RELEASE+"shufang.apk", ver:String(LATEST)}); $("updMsg").textContent="下载好了，按系统提示安装。"; }
+  catch(e){ $("updMsg").textContent = "下载没成功："+((e && e.message) || e); }
+  try{ (await sub).remove(); }catch(e){}
+  btn.disabled=false; btn.textContent="下载并安装新版本";
+};
+if (NATIVE && VER) checkUpdate().then(m => { if (LATEST > VER) $("updMsg").textContent = m; });
+</script>
+</body>
+</html>

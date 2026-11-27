@@ -1,0 +1,38 @@
+name: build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      VC: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      # 把版本号写进页面，App 靠它判断有没有新版
+      - run: sed -i "s/const VER = 0;/const VER = $VC;/" www/index.html
+      - run: npm ci
+      - run: npx cap sync android
+      - name: build
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug > ../build.log 2>&1 || { echo "::error::$(grep -E 'error:|What went wrong' -A3 ../build.log | head -c 1500 | tr '\n' ' ')"; tail -n 60 ../build.log; exit 1; }
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk shufang.apk
+          echo $VC > version.txt
+          for t in $(gh release list --limit 200 --json tagName -q '.[].tagName'); do gh release delete "$t" -y --cleanup-tag; done
+          gh release create v$VC shufang.apk version.txt -t "第 $VC 版" -n "$(git log -1 --pretty=%s)" --latest

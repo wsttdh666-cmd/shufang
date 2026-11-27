@@ -1,0 +1,9 @@
+{
+  "appId": "app.shufang.hub",
+  "appName": "书房",
+  "webDir": "www",
+  "loggingBehavior": "none",
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}

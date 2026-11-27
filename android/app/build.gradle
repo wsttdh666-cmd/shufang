@@ -16,6 +16,13 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // 番茄下载引擎是个原生可执行文件，以 libtomato.so 放在 jniLibs。
+    // 必须解压到磁盘（而不是从 APK 内存映射），否则没法 exec 它。
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
     signingConfigs {
         fixed {
             storeFile file('sign.jks')

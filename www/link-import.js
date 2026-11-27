@@ -47,6 +47,95 @@
     return clean(c.textContent.split("\n").map(s => s.trim()).join("\n"));
   }
 
+  /* ---------------- 番茄下载引擎（本地服务） ----------------
+     官方 Rust 二进制随 APK 以 libtomato.so 分发，由原生插件 TomatoEngine 起成
+     127.0.0.1:18423 的本地服务。番茄正文的签名/解密都在它里面，这里只管调它的 /api。 */
+  const ENGINE = {base: "http://127.0.0.1:18423", ready: false, configured: false};
+
+  // 调引擎的 JSON 接口：走 CapacitorHttp（原生 HTTP，免 CORS），返回 {status, data}
+  async function engineJson(path, {method = "GET", json, timeout = 60000} = {}){
+    const headers = json !== undefined ? {"Content-Type": "application/json"} : {};
+    const r = await Capacitor.nativePromise("CapacitorHttp", "request",
+      {url: ENGINE.base + path, method, headers, data: json, connectTimeout: 8000, readTimeout: timeout});
+    let data = r.data;
+    if (typeof data === "string"){ try { data = JSON.parse(data); } catch(e){} }
+    return {status: r.status, data};
+  }
+
+  // 确保引擎跑起来并就绪：起进程 → 轮询 /api/status 直到有版本号 → 配一次输出格式
+  async function engineEnsure(){
+    if (!NATIVE) throw new Error("番茄下载引擎只能在 App 里用");
+    if (ENGINE.ready) return;
+    try { await Capacitor.nativePromise("TomatoEngine", "start", {}); }
+    catch(e){ throw new Error("番茄引擎启动失败：" + ((e && e.message) || e)); }
+    // 首次启动要解压/初始化，给它点时间
+    const deadline = Date.now() + 45000;
+    let lastErr = "";
+    while (Date.now() < deadline){
+      try {
+        const r = await engineJson("/api/status", {timeout: 5000});
+        if (r.status === 200 && r.data && (r.data.version || r.data.prewarm !== undefined || r.data.prewarm_in_progress !== undefined)){
+          ENGINE.ready = true;
+          break;
+        }
+        lastErr = "HTTP " + r.status;
+      } catch(e){ lastErr = String((e && e.message) || e); }
+      await sleep(1000);
+    }
+    if (!ENGINE.ready) throw new Error("番茄引擎没能就绪（" + lastErr + "）。可以退出重进 App 再试。");
+    if (!ENGINE.configured){
+      // 设成直接出 txt，别在下载后弹"选格式"把任务卡住
+      try { await engineJson("/api/config", {method: "POST", json: {novel_format: "txt"}}); } catch(e){}
+      ENGINE.configured = true;
+    }
+  }
+
+  // 下载产出的 txt 落在引擎 data-dir 下（通常是 书名/书名.txt）。
+  // 列 /api/library（条目有 kind/rel_path/name/ext/modified_ms）找这本书对应的 .txt，返回 rel_path。
+  async function engineListDir(rel){
+    const qs = rel ? "?path=" + encodeURIComponent(rel) : "";
+    const r = await engineJson("/api/library" + qs);
+    return (r.data && r.data.items) || [];
+  }
+  function isTxt(it){ return (it.kind || "file") === "file" && (/txt/i.test(it.ext || "") || /\.txt$/i.test(it.name || it.rel_path || "")); }
+  function newest(list){ return list.slice().sort((a,b) => (b.modified_ms||0) - (a.modified_ms||0))[0] || null; }
+
+  async function engineFindFile(book){
+    const norm = (s) => String(s || "").replace(/\s+/g, "");
+    const title = norm(book.title);
+    const roots = await engineListDir("");
+    // 1) 根目录下匹配书名的 .txt；否则记下最新的 .txt 作兜底
+    const rootTxt = roots.filter(isTxt);
+    const hitRoot = rootTxt.find(it => norm(it.name).indexOf(title) >= 0);
+    if (hitRoot) return hitRoot.rel_path;
+    // 2) 进匹配书名的子目录找 .txt（取最新）
+    const dirs = roots.filter(it => it.kind === "dir");
+    const hitDir = dirs.find(d => norm(d.name).indexOf(title) >= 0 || title.indexOf(norm(d.name)) >= 0);
+    if (hitDir){
+      const sub = (await engineListDir(hitDir.rel_path)).filter(isTxt);
+      const f = newest(sub);
+      if (f) return f.rel_path;
+    }
+    // 3) 根目录任意最新 .txt
+    if (rootTxt.length) return newest(rootTxt).rel_path;
+    // 4) 扫所有子目录里最新的 .txt
+    let cands = [];
+    for (const d of dirs){
+      const sub = (await engineListDir(d.rel_path)).filter(isTxt);
+      cands = cands.concat(sub);
+    }
+    const f = newest(cands);
+    return f ? f.rel_path : null;
+  }
+
+  // 取产出文件的正文：用 AppTools.get 取字节再按编码解码（引擎导出的是 UTF-8）
+  async function engineReadFile(rel){
+    const url = ENGINE.base + "/download/" + String(rel).split("/").map(encodeURIComponent).join("/");
+    const r = await get(url);
+    if (r.status !== 200) throw new Error("取下载文件失败（HTTP " + r.status + "）");
+    return decode(r.bytes);
+  }
+
   /* ---------------- 各平台 ---------------- */
   const PLATFORMS = {
     jjwxc: {
@@ -145,6 +234,45 @@
         return null;
       },
       async load(id){
+        // App 里：走内置番茄引擎（官方接口，正文是干净文字）。浏览器预览里没有引擎，退回网页解析。
+        if (NATIVE){
+          try { return await this.loadEngine(id); }
+          catch(e){
+            // 引擎这边出问题（没起来/架构不支持/网络），退回网页原样（加密字体）
+            const b = await this.loadWeb(id);
+            b.notice = "番茄引擎没能用（" + ((e && e.message) || e) + "），退回网页原样：正文是加密字体，约一半字会显示成空白或方框。";
+            return b;
+          }
+        }
+        return this.loadWeb(id);
+      },
+      // 引擎模式：预览拿书的信息和章节数；下载由任务完成，不逐章抓
+      async loadEngine(id){
+        await engineEnsure();
+        const r = await engineJson("/api/preview/" + encodeURIComponent(id));
+        if (r.status !== 200 || !r.data) throw new Error("引擎读取书籍信息失败（HTTP " + r.status + "）");
+        const p = r.data;
+        const title = p.book_name || p.title || p.original_book_name || "";
+        if (!title) throw new Error("没读到这本书的信息（可能是链接里的 book_id 不对）");
+        const n = parseInt(p.chapter_count, 10) || 0;
+        const wn = parseInt(p.word_count || p.word_number || p.words, 10) || 0;
+        return {
+          id,
+          url: "https://fanqienovel.com/page/" + id,
+          title,
+          author: p.author || "",
+          status: (p.finished === true ? "已完结" : p.finished === false ? "连载中" : ""),
+          words: wn ? wanzi(wn) : "",
+          intro: clean(p.description || p.desc || p.abstract || ""),
+          chapter_count: n,
+          chapters: [],              // 引擎模式不逐章渲染；按范围下载
+          engine: true,
+          encrypted: false,
+          notice: "用内置番茄引擎下载，正文是干净文字（不是网页加密字体）。首次下载会初始化引擎，稍等几秒。整本很大时建议分段下。"
+        };
+      },
+      // 网页兜底：和以前一样，解析 __INITIAL_STATE__，正文是加密字体
+      async loadWeb(id){
         const url = "https://fanqienovel.com/page/" + id;
         const {html} = await page(url);
         const st = initialState(html), p = st && st.page;
@@ -284,7 +412,7 @@
     return jjNickCache;
   }
   const SITES = {
-    fanqie: {login:false, hint:"番茄不用登录，直接粘贴作品链接或分享文字。正文是加密字体，下载的是网页原样。"},
+    fanqie: {login:false, hint:"番茄不用登录，直接粘贴作品链接或分享文字。用内置引擎下载，正文是干净文字（首次会初始化几秒）。"},
     jjwxc: {login:true, check:"https://www.jjwxc.net/", logout:".jjwxc.net", mark:/^(readerid|token|bbstoken)$/i,
       page:"https://my.jjwxc.net/login.php", hint:"免费章节不用登录也能下。登录后，买过的 VIP 章节也能下（网页原样，加密字体）。"},
     qidian: {login:true, check:"https://www.qidian.com/", logout:".qidian.com", mark:/^(ywguid|ywkey)$/i,
@@ -361,22 +489,37 @@
   $("bkInput").onkeydown = e => { if (e.key === "Enter") $("bkRecognize").click(); };
 
   function showBook(){
-    const b = book, ok = b.chapters.filter(c => c.state === "可导").length;
+    const b = book;
+    const eng = !!b.engine;
+    const total = eng ? (b.chapter_count || 0) : b.chapters.length;
+    const ok = eng ? total : b.chapters.filter(c => c.state === "可导").length;
     $("bkTitle").textContent = b.title;
     $("bkPlatform").textContent = b.platform;
-    $("bkMeta").textContent = [b.author && "作者：" + b.author, b.status, b.words, "目录 " + b.chapters.length + " 章"].filter(Boolean).join(" · ");
+    $("bkMeta").textContent = [b.author && "作者：" + b.author, b.status, b.words, "目录 " + total + " 章"].filter(Boolean).join(" · ");
     $("bkIntro").textContent = b.intro || "（没有简介）";
-    $("bkAvail").textContent = "可导出 " + ok + " 章" + (b.encrypted ? "（加密原样）" : "") + "，导不了 " + (b.chapters.length - ok) + " 章。";
+    $("bkAvail").textContent = eng
+      ? "可下载 " + total + " 章，正文是干净文字。下面填章节范围（留空＝整本）。"
+      : "可导出 " + ok + " 章" + (b.encrypted ? "（加密原样）" : "") + "，导不了 " + (b.chapters.length - ok) + " 章。";
     setStatus("bkNotice", b.notice || "", b.notice ? "warn" : "");
     b.cmtOk = b.key === "jjwxc";
-    for (const c of b.chapters){ c.pick = c.state === "可导"; c.cmt = false; }
-    $("bkFrom").value = b.chapters[0].num; $("bkTo").value = b.chapters[b.chapters.length - 1].num;
-    $("bkFrom").max = $("bkTo").max = b.chapters[b.chapters.length - 1].num;
+    const first = eng ? 1 : b.chapters[0].num;
+    const last = eng ? (total || 1) : b.chapters[b.chapters.length - 1].num;
+    $("bkFrom").value = first; $("bkTo").value = last;
+    $("bkFrom").max = $("bkTo").max = last;
     $("bkCmtRow").hidden = !b.cmtOk;
     $("bkCmtHint").textContent = b.cmtOk ? "段评按章选：在下面每章右边勾“段评”，或者用上面的按钮批量勾。带段评会慢不少，每一段都要单独去取。"
-      : "番茄网页版没有段评（只有番茄 App 里有），所以这里不能带。";
+      : "番茄用内置引擎整本/范围下载，没有逐章段评。";
     $("bkAddShelf").textContent = "加入书架";
-    drawPicks();
+    if (eng){
+      // 引擎模式：按范围下载，不逐章渲染（整本可能几千章，渲染会卡）
+      const box = $("bkList"); box.textContent = "";
+      box.append(el("div", "note", "番茄按整本 / 范围下载：改上面的起止章（留空就是整本），直接点“开始下载”。"));
+      $("bkRange").textContent = "将下载第 " + first + "–" + last + " 章（整本）。";
+      $("bkStart").disabled = false;
+    } else {
+      for (const c of b.chapters){ c.pick = c.state === "可导"; c.cmt = false; }
+      drawPicks();
+    }
     $("bkInfo").hidden = false;
   }
   function drawPicks(){
@@ -400,7 +543,7 @@
     countRange();
   }
   $("bkList").addEventListener("change", e => {
-    const t = e.target; if (!t.dataset || t.dataset.i === undefined || !book) return;
+    const t = e.target; if (!t.dataset || t.dataset.i === undefined || !book || book.engine) return;
     const c = book.chapters[+t.dataset.i];
     if (t.dataset.k === "pick"){ c.pick = t.checked; if (!c.pick && c.cmt){ c.cmt = false; drawPicks(); return; } }
     else { c.cmt = t.checked; if (c.cmt && !c.pick){ c.pick = true; drawPicks(); return; } }
@@ -408,12 +551,12 @@
   });
   function picked(){ return book.chapters.filter(c => c.pick && c.state === "可导"); }
   function countRange(){
-    if (!book) return;
+    if (!book || book.engine) return;
     const p = picked(), n = p.filter(c => c.cmt).length;
     $("bkRange").textContent = "已选 " + p.length + " 章" + (book.cmtOk ? "，其中 " + n + " 章带段评" : "") + "。";
     $("bkStart").disabled = !p.length;
   }
-  function setAll(fn){ if (!book) return; book.chapters.forEach(c => { if (c.state === "可导") fn(c); }); drawPicks(); }
+  function setAll(fn){ if (!book || book.engine) return; book.chapters.forEach(c => { if (c.state === "可导") fn(c); }); drawPicks(); }
   $("bkPickAll").onclick = $("bkPickAll2").onclick = () => setAll(c => { c.pick = true; });
   $("bkPickNone").onclick = $("bkPickNone2").onclick = () => setAll(c => { c.pick = false; c.cmt = false; });
   $("bkPickRange").onclick = () => {
@@ -455,6 +598,7 @@
   };
 
   $("bkStart").onclick = () => {
+    if (book && book.engine){ startEngineDownload(); return; }
     const list = picked();
     if (!list.length){ setStatus("bkMsg", "这个范围里没有能导的章节。", "warn"); return; }
     const n = +$("bkCmtN").value || 5;
@@ -463,9 +607,128 @@
     $("bkInfo").hidden = true; $("bkRun").hidden = false; $("bkDone").hidden = true;
     loop();
   };
-  $("bkPause").onclick = () => { if (run){ run.stop = true; setStatus("bkRunMsg", "这一章下完就暂停…"); } };
-  $("bkResume").onclick = () => loop();
+  $("bkPause").onclick = () => { if (run && run.engine){ run.stop = true; setStatus("bkRunMsg", "正在取消…"); return; } if (run){ run.stop = true; setStatus("bkRunMsg", "这一章下完就暂停…"); } };
+  $("bkResume").onclick = () => { if (run && run.engine) return; loop(); };
   $("bkBack").onclick = () => { if (run && run.active) return; $("bkRun").hidden = true; if (book) $("bkInfo").hidden = false; };
+
+  /* ---------------- 番茄：引擎任务式下载 ---------------- */
+  async function startEngineDownload(){
+    const b = book;
+    const total = b.chapter_count || 0;
+    let f = parseInt($("bkFrom").value, 10), t = parseInt($("bkTo").value, 10);
+    if (!f || f < 1) f = 1;
+    if (!t || t < 1) t = total || 0;
+    let lo = Math.min(f, t), hi = Math.max(f, t);
+    if (total){ lo = Math.max(1, lo); hi = Math.min(total, hi); }
+    const whole = (!total) || (lo <= 1 && hi >= total);
+    const payload = {id: String(b.id), book_id: String(b.id)};
+    if (!whole){ payload.range_start = lo; payload.range_end = hi; }
+
+    run = {engine:true, book:b, active:true, stop:false, jobId:null, savedId:null, savedName:null};
+    $("bkInfo").hidden = true; $("bkRun").hidden = false; $("bkDone").hidden = true;
+    $("bkRunTitle").textContent = "《" + b.title + "》 番茄" + (whole ? "（整本）" : "（" + lo + "–" + hi + " 章）");
+    $("bkRunList").textContent = "";
+    $("bkPause").hidden = false; $("bkPause").textContent = "停止"; $("bkResume").hidden = true; $("bkBack").hidden = true;
+    $("bkCount").textContent = "正在提交下载任务…";
+    $("bkBar").style.width = "3%";
+    setStatus("bkRunMsg", "正在让引擎开始下载…（首次会初始化，稍等）");
+    try {
+      const r = await engineJson("/api/jobs", {method:"POST", json: payload, timeout: 30000});
+      if (r.status >= 400) throw new Error("建任务失败（HTTP " + r.status + "）");
+      if (r.data && (r.data.id || r.data.job_id)) run.jobId = String(r.data.id || r.data.job_id);
+      await pollEngineJob();
+    } catch(e){
+      run.active = false;
+      $("bkPause").hidden = true;
+      setStatus("bkRunMsg", "下载失败：" + ((e && e.message) || e), "warn");
+      $("bkBack").hidden = false;
+    }
+  }
+
+  async function pollEngineJob(){
+    const b = book, bid = String(b.id);
+    const deadline = Date.now() + 1000 * 60 * 40;   // 最多等 40 分钟
+    while (Date.now() < deadline){
+      if (run.stop){
+        if (run.jobId){ try { await engineJson("/api/jobs/" + encodeURIComponent(run.jobId) + "/cancel", {method:"POST", timeout:8000}); } catch(e){} }
+        run.active = false; $("bkPause").hidden = true;
+        setStatus("bkRunMsg", "已取消。", "warn"); $("bkBack").hidden = false; return;
+      }
+      let job = null;
+      try {
+        const r = await engineJson("/api/jobs", {timeout: 10000});
+        const items = (r.data && r.data.items) || (Array.isArray(r.data) ? r.data : []);
+        const mine = items.filter(j => String(j.book_id) === bid || (run.jobId && String(j.id) === run.jobId));
+        job = (run.jobId && mine.find(j => String(j.id) === run.jobId)) || mine[mine.length - 1] || null;
+        if (job && !run.jobId) run.jobId = String(job.id);
+      } catch(e){}
+      if (job){
+        // 待配置：引擎在等选书名/格式，自动替用户选（书名取第一个候选，格式选 txt）
+        const bno = job.book_name_options || [], fmo = job.format_options || [];
+        if (fmo.length){
+          const pick = (fmo.find(o => /txt/i.test(o.value)) || fmo[0]).value;
+          try { await engineJson("/api/jobs/" + encodeURIComponent(job.id) + "/format", {method:"POST", json:{value:pick}, timeout:10000}); } catch(e){}
+          setStatus("bkRunMsg", "引擎在确认输出格式…"); await sleep(800); continue;
+        }
+        if (bno.length){
+          const pick = bno[0].value;
+          try { await engineJson("/api/jobs/" + encodeURIComponent(job.id) + "/book_name", {method:"POST", json:{value:pick}, timeout:10000}); } catch(e){}
+          setStatus("bkRunMsg", "引擎在确认书名…"); await sleep(800); continue;
+        }
+        const st = String(job.state || "").toLowerCase();
+        const saved = job.progress ? (job.progress.saved_chapters || 0) : 0;
+        const total = job.progress ? (job.progress.chapter_total || 0) : 0;
+        const pct = total > 0 ? Math.min(99, Math.round(100 * saved / total)) : 12;
+        $("bkBar").style.width = pct + "%";
+        $("bkCount").textContent = total ? ("正文保存 " + saved + " / " + total) : ("状态：" + (st || "进行中"));
+        if (st === "done" || st === "success" || st === "finished" || st === "completed"){
+          run.partial = total > 0 && saved < total ? (total - saved) : 0;
+          $("bkBar").style.width = "99%"; $("bkPause").hidden = true;
+          setStatus("bkRunMsg", "下载完成，正在取回正文…");
+          await engineImport(job); return;
+        }
+        if (st === "failed" || st === "error"){
+          run.active = false; $("bkPause").hidden = true;
+          setStatus("bkRunMsg", "引擎下载失败：" + (job.error || st) + "（可以点停止后回去重试）", "warn");
+          $("bkBack").hidden = false; return;
+        }
+        if (st === "canceled" || st === "cancelled"){
+          run.active = false; $("bkPause").hidden = true;
+          setStatus("bkRunMsg", "任务已取消。", "warn"); $("bkBack").hidden = false; return;
+        }
+        setStatus("bkRunMsg", st === "queued" ? "排队中…" : "正在下载…" + (total ? "（" + saved + "/" + total + "）" : ""));
+      } else {
+        setStatus("bkRunMsg", "正在下载…");
+      }
+      await sleep(1500);
+    }
+    run.active = false; $("bkPause").hidden = true;
+    setStatus("bkRunMsg", "等太久了，先停了。可以回去重试。", "warn"); $("bkBack").hidden = false;
+  }
+
+  async function engineImport(job){
+    const b = book;
+    try {
+      const rel = await engineFindFile(b);
+      if (!rel) throw new Error("下载完成了，但没找到引擎输出的 txt 文件");
+      const text = await engineReadFile(rel);
+      if (!text || !text.trim()) throw new Error("取回的正文是空的");
+      const partial = run.partial || 0;
+      const name = b.title + (partial ? "（缺 " + partial + " 章）" : "");
+      run.savedName = name;
+      run.savedId = await bookAdd(name, text, undefined, {platform:"番茄", url:b.url, author:b.author});
+      run.active = false;
+      $("bkBar").style.width = "100%";
+      $("bkCount").textContent = "已存进书架：" + name;
+      setStatus("bkRunMsg", "下载完成，已存进书架：" + name + (partial ? "（有 " + partial + " 章没下成）" : ""), "ok");
+      $("bkDone").hidden = false; $("bkBack").hidden = false;
+      try { await loadBooks(); } catch(e){}
+    } catch(e){
+      run.active = false;
+      setStatus("bkRunMsg", "导入失败：" + ((e && e.message) || e), "warn");
+      $("bkBack").hidden = false;
+    }
+  }
 
   function draw(){
     const r = run, n = r.list.length, c = {ok:0, fail:0, nobuy:0};
@@ -554,8 +817,11 @@
   }
   $("bkSaveTxt").onclick = async () => {
     if (!run || !run.savedId) return;
-    try { setStatus("bkRunMsg", await fileOut("save", safe(run.savedName) + ".txt", composeText(run)), "ok"); }
-    catch(e){ setStatus("bkRunMsg", "没存成：" + ((e && e.message) || e), "warn"); }
+    try {
+      // 引擎模式没有逐章 list，直接取已存进书架的正文
+      const text = run.engine ? await bookText(run.savedId) : composeText(run);
+      setStatus("bkRunMsg", await fileOut("save", safe(run.savedName) + ".txt", text), "ok");
+    } catch(e){ setStatus("bkRunMsg", "没存成：" + ((e && e.message) || e), "warn"); }
   };
   $("bkMakeCard").onclick = () => { if (!run || !run.savedId) return; show("card"); $("cardBook").value = run.savedId; $("cardBook").onchange && $("cardBook").onchange(); };
   $("bkShelf").onclick = () => show("shelf");

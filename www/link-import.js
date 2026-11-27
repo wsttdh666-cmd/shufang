@@ -212,9 +212,14 @@
 
   // 从贴进来的文字里找出网址，认出平台和书号；番茄分享短链要先问一下它跳到哪
   async function recognize(input){
-    const m = String(input).match(/https?:\/\/[^\s<>"'「」【】《》，。！？）)]+/i);
-    if (!m) throw new Error("没找到网址。请粘贴作品详情页的链接，或 App 里“分享”复制出来的那段文字。");
-    let u = new URL(m[0]);
+    const raw = String(input).trim();
+    const STOP = "[^\\s<>\"'「」【】《》，。！？）)]+";
+    let m = raw.match(new RegExp("https?:\\/\\/" + STOP, "i"));
+    let urlStr = m ? m[0]
+      : (raw.match(new RegExp("((?:[\\w-]+\\.)+(?:com|net|cn|org))\\/" + STOP, "i")) || [])[0];
+    if (urlStr && !/^https?:\/\//i.test(urlStr)) urlStr = "https://" + urlStr;
+    if (!urlStr) throw new Error("没找到网址。请粘贴作品详情页的链接，或 App 里“分享”复制出来的那段文字。");
+    let u = new URL(urlStr);
     if (/(^|\.)changdunovel\.com$/.test(u.hostname) && /^\/t\//.test(u.pathname)){
       const r = await get(u.href, {redirect:false});
       const loc = r.headers.location;

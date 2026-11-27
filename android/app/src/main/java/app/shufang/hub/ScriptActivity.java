@@ -22,7 +22,11 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
+import android.view.WindowManager;
+import android.webkit.JsResult;
+import org.json.JSONArray;
 import android.widget.Toast;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -61,7 +65,11 @@ public class ScriptActivity extends Activity {
     private WebView web;
     private TextView status;
     private Button uaButton, exportButton;
-    private boolean exporting = false;
+    private boolean exporting = false, polling = false;
+    private LinearLayout panel;
+    private TextView summary, chapters, errors;
+    private ScrollView chapterScroll;
+    private String lastItems = "";
     private final ScriptStore store = new ScriptStore();
     private volatile boolean ready = false;
     private boolean registered = false, legacy = false, desktop = true, preparing = false;
@@ -130,6 +138,31 @@ public class ScriptActivity extends Activity {
         exportLp.setMargins(dp(8), dp(4), dp(8), dp(4));
         root.addView(exportButton, exportLp);
 
+        panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(Color.rgb(246, 247, 250));
+        panel.setPadding(dp(12), dp(6), dp(12), dp(6));
+        panel.setVisibility(View.GONE);
+        summary = new TextView(this);
+        summary.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        summary.setTextColor(Color.rgb(28, 34, 48));
+        summary.setTypeface(null, android.graphics.Typeface.BOLD);
+        panel.addView(summary);
+        chapterScroll = new ScrollView(this);
+        chapters = new TextView(this);
+        chapters.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        chapters.setTextColor(Color.rgb(60, 66, 80));
+        chapters.setLineSpacing(0, 1.15f);
+        chapterScroll.addView(chapters);
+        panel.addView(chapterScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(170)));
+        errors = new TextView(this);
+        errors.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        errors.setTextColor(Color.rgb(179, 38, 30));
+        errors.setVisibility(View.GONE);
+        errors.setTextIsSelectable(true);
+        panel.addView(errors);
+        root.addView(panel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         web = new WebView(this);
         root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
@@ -161,7 +194,16 @@ public class ScriptActivity extends Activity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
 
         web.addJavascriptInterface(new Bridge(), "ShufangBridge");
-        web.setWebChromeClient(new WebChromeClient());
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onJsAlert(WebView view, String url, String message, JsResult result) {
+                result.confirm();
+                status.setText("网页提示：" + message);
+                errors.setVisibility(View.VISIBLE);
+                errors.setText("网页提示：" + message + "\n" + errors.getText());
+                return true;
+            }
+        });
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -187,6 +229,8 @@ public class ScriptActivity extends Activity {
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
                 bodies.clear();
                 exporting = false;
+                lastItems = "";
+                panel.setVisibility(View.GONE);
                 // 老版本的系统浏览器内核不支持"页面一开始就运行"，只能在这里尽早塞进去
                 if (legacy && ready && store.matches(url)) view.evaluateJavascript(payload, null);
             }
@@ -217,6 +261,10 @@ public class ScriptActivity extends Activity {
         boolean book = store.matches(url);
         exportButton.setVisibility(book ? View.VISIBLE : View.GONE);
         if (!exporting) status.setText(book ? TIP_BOOK : TIP_READY);
+        if (book && !polling) {
+            polling = true;
+            main.postDelayed(this::pollProgress, 1500);
+        }
     }
 
     // evaluateJavascript 返回的是带引号的 JSON 字符串，这里还原成普通文字
@@ -236,7 +284,11 @@ public class ScriptActivity extends Activity {
             if (r.equals("ok")) {
                 exporting = true;
                 status.setText("已开始导出，先在读目录，稍等…");
-                main.postDelayed(this::pollProgress, 1500);
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                if (!polling) {
+                    polling = true;
+                    main.postDelayed(this::pollProgress, 1500);
+                }
             } else if (r.equals("jump")) {
                 status.setText("这一页不是目录页，正在跳到目录页。到了以后再点一次“导出这本书”。");
             } else {
@@ -245,22 +297,77 @@ public class ScriptActivity extends Activity {
         });
     }
 
-    // 把脚本自己的进度搬到提示行上（它原本显示在网页角落里，手机上很小）
+    // 每 1.5 秒读一次脚本里的书和各章状态，显示到面板上
     private void pollProgress() {
-        if (!exporting || isDestroyed()) return;
-        web.evaluateJavascript("window.__sfProgress ? window.__sfProgress() : ''", value -> {
-            if (!exporting) return;
-            String p = plain(value);
-            if (!p.isEmpty()) status.setText("导出中　" + p + "　（别离开这一页）");
-            main.postDelayed(this::pollProgress, 1500);
+        if (isDestroyed()) return;
+        web.evaluateJavascript("window.__sfState ? window.__sfState() : ''", value -> {
+            try {
+                String raw = plain(value);
+                if (!raw.isEmpty()) showState(new JSONObject(raw));
+            } catch (Exception e) {
+                // 这一次没读到，下次再读
+            }
+            if (polling && !isDestroyed()) main.postDelayed(this::pollProgress, 1500);
         });
     }
 
-    private void switchUa() {
-        desktop = !desktop;
-        web.getSettings().setUserAgentString(desktop ? desktopUa : mobileUa);
-        uaButton.setText(desktop ? "换成手机版" : "换成电脑版");
-        web.reload();
+    private void showState(JSONObject st) throws Exception {
+        int total = st.optInt("total");
+        boolean running = st.optBoolean("downloading");
+        JSONObject c = st.optJSONObject("count");
+        int done = c == null ? 0 : c.optInt("完成"), fail = c == null ? 0 : c.optInt("失败"),
+            busy = c == null ? 0 : c.optInt("下载中"), wait = c == null ? 0 : c.optInt("等待");
+        JSONArray logs = st.optJSONArray("logs");
+        if (total == 0 && !running && (logs == null || logs.length() == 0)) return;
+        panel.setVisibility(View.VISIBLE);
+        if (running) exporting = true;
+
+        String title = st.optString("title");
+        if (total == 0) {
+            summary.setText(running ? "正在读取目录…" : "还没有读到目录");
+        } else {
+            summary.setText((title.isEmpty() ? "" : "《" + title + "》 ") + "目录共 " + total + " 章\n已下载 " + done
+                + " 章 · 下载中 " + busy + " · 失败 " + fail + " · 等待 " + wait);
+        }
+        if (exporting) {
+            String phase = st.optString("phase");
+            status.setText(running ? "导出中，别离开这一页" + (phase.isEmpty() ? "" : "　" + phase)
+                : total > 0 && done + fail >= total ? "下载结束，正在打包成 txt…" : "导出停下了，看下面的报错");
+        }
+
+        // 逐章列表：只在有变化时重画，避免滚动位置乱跳
+        JSONArray items = st.optJSONArray("items");
+        String key = items == null ? "" : items.toString();
+        if (!key.equals(lastItems)) {
+            lastItems = key;
+            StringBuilder sb = new StringBuilder();
+            int firstBusy = -1;
+            for (int i = 0; items != null && i < items.length(); i++) {
+                JSONArray it = items.getJSONArray(i);
+                String s = it.optString(2);
+                String mark = s.equals("完成") ? "✓" : s.equals("失败") ? "✗" : s.equals("下载中") ? "…" : s.equals("中止") ? "■" : "·";
+                if (firstBusy < 0 && (s.equals("下载中") || s.equals("等待"))) firstBusy = i;
+                sb.append(mark).append(' ').append(it.optInt(0)).append("  ").append(it.optString(1));
+                if (it.optInt(3) == 1) sb.append("  [VIP]");
+                if (!s.equals("完成")) sb.append("  ").append(s);
+                sb.append('\n');
+            }
+            chapters.setText(sb.toString());
+            // 自动滚到正在下载的那一章附近
+            if (firstBusy >= 0) {
+                final int line = Math.max(0, firstBusy - 2);
+                chapters.post(() -> {
+                    if (chapters.getLayout() != null) chapterScroll.scrollTo(0, chapters.getLayout().getLineTop(Math.min(line, chapters.getLineCount() - 1)));
+                });
+            }
+        }
+
+        if (logs != null && logs.length() > 0) {
+            StringBuilder e = new StringBuilder("最近的报错（可长按复制发给我）：");
+            for (int i = logs.length() - 1; i >= 0 && i >= logs.length() - 4; i--) e.append('\n').append(logs.getString(i));
+            errors.setText(e.toString());
+            errors.setVisibility(View.VISIBLE);
+        }
     }
 
     // 下载脚本和它的组件（第一次要下十几兆），好了以后挂到浏览器上并刷新当前页
@@ -479,6 +586,7 @@ public class ScriptActivity extends Activity {
                     toast("已收进书架：" + f.name);
                     main.post(() -> {
                         exporting = false;
+                        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                         status.setText("导出完成，《" + f.name.substring(0, f.name.length() - 4) + "》已收进书架。点“完成”回去看。");
                     });
                 } else {
@@ -513,6 +621,7 @@ public class ScriptActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        polling = false;
         CookieManager.getInstance().flush();
         pool.shutdownNow();
         web.destroy();

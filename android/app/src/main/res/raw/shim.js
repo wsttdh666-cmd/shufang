@@ -18,11 +18,26 @@
   function remember(msg) { if (!window.__sfErr && msg) window.__sfErr = String(msg).slice(0, 200); }
   window.addEventListener("error", function (e) { remember(e.message || e.error); });
   window.addEventListener("unhandledrejection", function (e) { remember(e.reason && (e.reason.message || e.reason)); });
-  var rawError = console.error;
-  console.error = function () {
-    try { var s = Array.prototype.map.call(arguments, String).join(" "); if (s.indexOf("bootstrap failed") >= 0) remember(s); } catch (e) {}
-    return rawError.apply(console, arguments);
-  };
+  // 脚本的报错和警告留最近 30 条，显示在 App 的进度面板上
+  var logs = [];
+  window.__sfLogs = logs;
+  function keep(kind, args) {
+    try {
+      var s = Array.prototype.map.call(args, function (a) {
+        if (a && a.message) return a.message;
+        if (typeof a === "object") { try { return JSON.stringify(a).slice(0, 200); } catch (e) { return String(a); } }
+        return String(a);
+      }).join(" ").replace(/\s+/g, " ").slice(0, 300);
+      logs.push(new Date().toTimeString().slice(0, 8) + " " + kind + " " + s);
+      if (logs.length > 30) logs.shift();
+      if (kind === "错误" && s.indexOf("bootstrap failed") >= 0) remember(s);
+    } catch (e) {}
+  }
+  var rawError = console.error, rawWarn = console.warn;
+  console.error = function () { keep("错误", arguments); return rawError.apply(console, arguments); };
+  console.warn = function () { keep("警告", arguments); return rawWarn.apply(console, arguments); };
+  window.addEventListener("error", function (e) { keep("错误", [e.message || e.error]); });
+  window.addEventListener("unhandledrejection", function (e) { keep("错误", [e.reason && (e.reason.message || e.reason)]); });
 
   // ---- 脚本自己的设置（GM_setValue 那一套），第一次用到时才去取
   var store = null;
@@ -138,6 +153,20 @@
   window.__sfProgress = function () {
     var p = ui("#nd-progress");
     return p ? String(p.innerText || "").replace(/\s+/g, " ").trim().slice(0, 80) : "";
+  };
+  // 给 App 的进度面板用：目录有多少章、每章到哪一步了、最近的报错
+  var STATUS = ["等待", "下载中", "失败", "完成", "中止", "完成"];
+  window.__sfState = function () {
+    var b = window._book, ch = (b && b.chapters) || [], c = { 完成: 0, 下载中: 0, 失败: 0, 等待: 0, 中止: 0 }, items = [];
+    for (var i = 0; i < ch.length; i++) {
+      var x = ch[i], s = STATUS[x.status] || "等待";
+      c[s] = (c[s] || 0) + 1;
+      items.push([x.chapterNumber || i + 1, String(x.chapterName || ""), s, x.isVIP ? 1 : 0]);
+    }
+    return JSON.stringify({
+      downloading: !!window.downloading, title: (b && b.bookname) || "", total: ch.length, count: c,
+      items: items, logs: logs.slice(-8), phase: window.__sfProgress()
+    });
   };
 
   // ---- 接住脚本导出的文件：它是用「点一个带 download 的链接」来保存的，这里改成交给 App

@@ -1,5 +1,6 @@
 package app.shufang.hub;
 
+import android.util.Base64;
 import android.util.Log;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;

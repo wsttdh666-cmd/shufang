@@ -33,6 +33,21 @@ public class ScriptStore {
     public final List<String> parts = new ArrayList<>();   // 依次注入页面的代码段：依赖库……最后是脚本本身
     private final List<Pattern> match = new ArrayList<>();
     private final List<Pattern> exclude = new ArrayList<>();
+    private final List<String> matchSrc = new ArrayList<>();
+    private final List<String> excludeSrc = new ArrayList<>();
+
+    // 写进页面的一小段：告诉页面里的代码哪些网址算书页、脚本是哪一版
+    public String rulesJs() {
+        try {
+            org.json.JSONObject o = new org.json.JSONObject();
+            o.put("m", new org.json.JSONArray(matchSrc));
+            o.put("x", new org.json.JSONArray(excludeSrc));
+            o.put("v", version);
+            return "window.__sfRules=" + o + ";";
+        } catch (Exception e) {
+            return "window.__sfRules={m:[],x:[],v:''};";
+        }
+    }
 
     public boolean matches(String url) {
         if (url == null) return false;
@@ -72,13 +87,15 @@ public class ScriptStore {
         List<String> requires = new ArrayList<>();
         match.clear();
         exclude.clear();
+        matchSrc.clear();
+        excludeSrc.clear();
         Matcher m = Pattern.compile("(?m)^//\\s*@(\\S+)\\s+(.+?)\\s*$").matcher(head);
         while (m.find()) {
             String key = m.group(1), value = m.group(2);
             if ("require".equals(key)) requires.add(value);
             else if ("version".equals(key)) version = value;
-            else if ("match".equals(key) || "include".equals(key)) add(match, value);
-            else if ("exclude".equals(key) || "exclude-match".equals(key)) add(exclude, value);
+            else if ("match".equals(key) || "include".equals(key)) add(match, matchSrc, value);
+            else if ("exclude".equals(key) || "exclude-match".equals(key)) add(exclude, excludeSrc, value);
         }
 
         StringBuilder tail = new StringBuilder();
@@ -113,10 +130,12 @@ public class ScriptStore {
             + "\n}).call(window,__sfGM.info,__sfGM.xhr,__sfGM.setValue,__sfGM.getValue,__sfGM.deleteValue,__sfGM.GM,window);}");
     }
 
-    private static void add(List<Pattern> list, String rule) {
+    private static void add(List<Pattern> list, List<String> sources, String rule) {
         try {
             if (rule.length() > 2 && rule.startsWith("/") && rule.endsWith("/")) {
-                list.add(Pattern.compile(".*(?:" + rule.substring(1, rule.length() - 1) + ").*"));
+                String src = "^.*(?:" + rule.substring(1, rule.length() - 1) + ").*$";
+                list.add(Pattern.compile(src));
+                sources.add(src);
                 return;
             }
             // *://www.example.com/book/* 这种写法转成正则
@@ -125,7 +144,7 @@ public class ScriptStore {
             String rest = rule;
             if (sep >= 0) {
                 String scheme = rule.substring(0, sep);
-                re.append("*".equals(scheme) ? "https?" : Pattern.quote(scheme)).append("://");
+                re.append("*".equals(scheme) ? "https?" : glob(scheme)).append("://");
                 rest = rule.substring(sep + 3);
                 int slash = rest.indexOf('/');
                 String host = slash >= 0 ? rest.substring(0, slash) : rest;
@@ -136,6 +155,7 @@ public class ScriptStore {
             }
             re.append(glob(rest)).append("$");
             list.add(Pattern.compile(re.toString()));
+            sources.add(re.toString());
         } catch (Exception e) {
             // 个别写法认不出来就跳过
         }
@@ -147,7 +167,11 @@ public class ScriptStore {
         String[] pieces = s.split("\\*", -1);
         for (int i = 0; i < pieces.length; i++) {
             if (i > 0) out.append(".*");
-            if (!pieces[i].isEmpty()) out.append(Pattern.quote(pieces[i]));
+            // 逐个字符转义，这样 Java 和页面里的 JavaScript 都能用同一条规则
+            for (char ch : pieces[i].toCharArray()) {
+                if ("\\^$.|?*+()[]{}/".indexOf(ch) >= 0) out.append('\\');
+                out.append(ch);
+            }
         }
         return out.toString();
     }

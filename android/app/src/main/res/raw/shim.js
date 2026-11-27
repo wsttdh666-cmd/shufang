@@ -1,21 +1,43 @@
 // 书房在站内浏览器里最先运行的一小段：给「小说下载器」脚本准备它要的几样东西，并把它导出的文件接进 App。
-// ShufangBridge 是 App 提供的原生接口（见 ScriptActivity.java）。
+// ShufangBridge 是 App 提供的原生接口（见 ScriptActivity.java）；__sfRules 是 App 先写进来的"哪些网址算书页"。
 (function () {
-  if (window.__sf || window.top !== window || typeof ShufangBridge === "undefined") return;
-  var B = ShufangBridge;
+  if (window.__sf || window.top !== window) return;
   window.__sf = 1;
+  function B() { return window.ShufangBridge; }
+
   // 只有脚本支持的页面（书的详情页）才真正运行脚本和它的依赖库
-  window.__sfRun = false;
-  try { window.__sfRun = !!B.matches(location.href.split("#")[0]); } catch (e) {}
+  var R = window.__sfRules || { m: [], x: [], v: "" }, href = location.href.split("#")[0];
+  function hit(list) {
+    for (var i = 0; i < list.length; i++) { try { if (new RegExp(list[i]).test(href)) return true; } catch (e) {} }
+    return false;
+  }
+  window.__sfRun = !hit(R.x || []) && hit(R.m || []);
   if (!window.__sfRun) return;
 
-  // ---- 脚本自己的设置（GM_setValue 那一套）
-  var store = {};
-  try { store = JSON.parse(B.values() || "{}") || {}; } catch (e) {}
-  function flush() { try { B.setValues(JSON.stringify(store)); } catch (e) {} }
-  function getValue(k, d) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : d; }
-  function setValue(k, v) { store[k] = v; flush(); }
-  function deleteValue(k) { delete store[k]; flush(); }
+  // 记下第一个出错信息，脚本没启动时好知道原因
+  function remember(msg) { if (!window.__sfErr && msg) window.__sfErr = String(msg).slice(0, 200); }
+  window.addEventListener("error", function (e) { remember(e.message || e.error); });
+  window.addEventListener("unhandledrejection", function (e) { remember(e.reason && (e.reason.message || e.reason)); });
+  var rawError = console.error;
+  console.error = function () {
+    try { var s = Array.prototype.map.call(arguments, String).join(" "); if (s.indexOf("bootstrap failed") >= 0) remember(s); } catch (e) {}
+    return rawError.apply(console, arguments);
+  };
+
+  // ---- 脚本自己的设置（GM_setValue 那一套），第一次用到时才去取
+  var store = null;
+  function all() {
+    if (store !== null) return store;
+    var b = B();
+    // 接口还没到：先当作没有设置，但不记下来，等它到了再读真的，免得把存好的设置盖掉
+    if (!b) return {};
+    try { store = JSON.parse(b.values() || "{}") || {}; } catch (e) { store = {}; }
+    return store;
+  }
+  function flush() { if (store === null) return; try { B().setValues(JSON.stringify(store)); } catch (e) {} }
+  function getValue(k, d) { var s = all(); return Object.prototype.hasOwnProperty.call(s, k) ? s[k] : d; }
+  function setValue(k, v) { all()[k] = v; flush(); }
+  function deleteValue(k) { delete all()[k]; flush(); }
 
   function b64ToBytes(b64) {
     var bin = atob(b64), n = bin.length, out = new Uint8Array(n);
@@ -54,14 +76,14 @@
       url: new URL(d.url, location.href).href, method: (d.method || "GET").toUpperCase(), headers: headers,
       data: bodyOf(d, headers), timeout: d.timeout || 0, anonymous: !!d.anonymous, cookie: d.cookie || "", referer: location.href
     };
-    try { B.xhr(id, JSON.stringify(req)); }
+    try { B().xhr(id, JSON.stringify(req)); }
     catch (e) { delete pending[id]; if (d.onerror) setTimeout(function () { d.onerror({ error: String(e) }); }, 0); }
     return { abort: function () { delete pending[id]; } };
   }
   // App 发完请求后回调这里；正文单独去取，避免一次塞太长的字符串
   window.__sfXhrDone = function (id, meta) {
     var d = pending[id]; delete pending[id];
-    var b64 = ""; try { b64 = B.xhrBody(id) || ""; } catch (e) {}
+    var b64 = ""; try { b64 = B().xhrBody(id) || ""; } catch (e) {}
     if (!d) return;
     if (meta.error) {
       var fail = { error: meta.error, status: 0, statusText: "", finalUrl: meta.finalUrl || d.url, context: d.context };
@@ -85,7 +107,7 @@
     if (d.onloadend) { try { d.onloadend(r); } catch (e) {} }
   };
 
-  var info = { scriptHandler: "Shufang", version: "1.0", script: { name: "小说下载器", version: String(B.scriptVersion() || "") } };
+  var info = { scriptHandler: "Shufang", version: "1.0", script: { name: "小说下载器", version: String(R.v || "") } };
   window.__sfGM = {
     info: info, xhr: xhr, getValue: getValue, setValue: setValue, deleteValue: deleteValue,
     GM: {
@@ -94,6 +116,28 @@
       setValue: function (k, v) { setValue(k, v); return Promise.resolve(); },
       deleteValue: function (k) { deleteValue(k); return Promise.resolve(); }
     }
+  };
+
+  // ---- App 工具栏上的"导出这本书"按到这里：替你点脚本自己的开始按钮；找不到就说明脚本没启动
+  function ui(sel) {
+    var h = document.querySelector("#nd-shadow-host"), r = h && h.shadowRoot;
+    return r ? r.querySelector(sel) : null;
+  }
+  window.__sfStart = function () {
+    var b = ui("#nd-button .download .nd-fab");
+    if (b) { b.click(); return "ok"; }
+    var j = ui("#nd-button .jump .nd-fab");
+    if (j) { j.click(); return "jump"; }
+    var names = ["CryptoJS", "fflate", "nunjucks", "Vue", "eSearchOCR", "ort", "csstree", "cv", "mdui"], missing = [];
+    for (var i = 0; i < names.length; i++) if (typeof window[names[i]] === "undefined") missing.push(names[i]);
+    return "no|" + JSON.stringify({
+      接口: typeof window.ShufangBridge, 缺组件: missing.join(","), 脚本界面: !!document.querySelector("#nd-shadow-host"),
+      页面状态: document.readyState, 报错: window.__sfErr || ""
+    });
+  };
+  window.__sfProgress = function () {
+    var p = ui("#nd-progress");
+    return p ? String(p.innerText || "").replace(/\s+/g, " ").trim().slice(0, 80) : "";
   };
 
   // ---- 接住脚本导出的文件：它是用「点一个带 download 的链接」来保存的，这里改成交给 App
@@ -113,16 +157,16 @@
     var fr = new FileReader();
     fr.onload = function () {
       try {
-        var bytes = new Uint8Array(fr.result), id = B.fileBegin(String(name || "未命名"), blob.type || ""), step = 262144;
+        var bytes = new Uint8Array(fr.result), id = B().fileBegin(String(name || "未命名"), blob.type || ""), step = 262144;
         for (var i = 0; i < bytes.length; i += step) {
           var part = bytes.subarray(i, i + step), s = "";
           for (var j = 0; j < part.length; j += 32768) s += String.fromCharCode.apply(null, part.subarray(j, j + 32768));
-          B.fileChunk(id, btoa(s));
+          B().fileChunk(id, btoa(s));
         }
-        B.fileEnd(id);
-      } catch (e) { try { B.note("文件没接住：" + e); } catch (e2) {} }
+        B().fileEnd(id);
+      } catch (e) { try { B().note("文件没接住：" + e); } catch (e2) {} }
     };
-    fr.onerror = function () { try { B.note("文件读不出来"); } catch (e) {} };
+    fr.onerror = function () { try { B().note("文件读不出来"); } catch (e) {} };
     fr.readAsArrayBuffer(blob);
   }
   function capture(a) {

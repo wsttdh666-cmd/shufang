@@ -53,12 +53,13 @@ import org.json.JSONObject;
 // 站内浏览器：你在里面正常登录网站、打开书的页面，App 在页面里运行开源的「小说下载器」脚本，
 // 脚本导出的 txt 直接收进书架，别的格式（epub 等）存到手机的「下载/书房」。
 public class ScriptActivity extends Activity {
-    private static final String TIP_READY = "登录后打开书的详情页（有目录的那一页），页面上会出现下载图标。";
-    private static final String TIP_BOOK = "这一页可以导出：点页面上的下载图标。导出的 txt 会自动进书架。";
+    private static final String TIP_READY = "登录后打开书的详情页（有目录的那一页），这里会出现“导出这本书”按钮。";
+    private static final String TIP_BOOK = "这一页可以导出：点下面的“导出这本书”。导出的 txt 会自动进书架。";
 
     private WebView web;
     private TextView status;
-    private Button uaButton;
+    private Button uaButton, exportButton;
+    private boolean exporting = false;
     private final ScriptStore store = new ScriptStore();
     private volatile boolean ready = false;
     private boolean registered = false, legacy = false, desktop = true, preparing = false;
@@ -120,6 +121,13 @@ public class ScriptActivity extends Activity {
         status.setOnClickListener(v -> { if (!ready && !preparing) prepare(); });
         root.addView(status, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        exportButton = button("导出这本书", v -> startExport());
+        exportButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        exportButton.setVisibility(View.GONE);
+        LinearLayout.LayoutParams exportLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52));
+        exportLp.setMargins(dp(8), dp(4), dp(8), dp(4));
+        root.addView(exportButton, exportLp);
+
         web = new WebView(this);
         root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
@@ -170,8 +178,10 @@ public class ScriptActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
                 bodies.clear();
+                exporting = false;
                 // 老版本的系统浏览器内核不支持"页面一开始就运行"，只能在这里尽早塞进去
                 if (legacy && ready && store.matches(url)) {
+                    view.evaluateJavascript(store.rulesJs(), null);
                     view.evaluateJavascript(shim, null);
                     for (String part : store.parts) view.evaluateJavascript(part, null);
                 }
@@ -200,7 +210,46 @@ public class ScriptActivity extends Activity {
 
     private void tip(String url) {
         if (!ready) return;
-        status.setText(store.matches(url) ? TIP_BOOK : TIP_READY);
+        boolean book = store.matches(url);
+        exportButton.setVisibility(book ? View.VISIBLE : View.GONE);
+        if (!exporting) status.setText(book ? TIP_BOOK : TIP_READY);
+    }
+
+    // evaluateJavascript 返回的是带引号的 JSON 字符串，这里还原成普通文字
+    private static String plain(String value) {
+        try {
+            Object v = new org.json.JSONTokener(value).nextValue();
+            return v == null || v == JSONObject.NULL ? "" : String.valueOf(v);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    // 替你点脚本自己的开始按钮；脚本没启动的话，把原因写在提示行里
+    private void startExport() {
+        web.evaluateJavascript("window.__sfStart ? window.__sfStart() : 'no|页面里的导出代码没有运行'", value -> {
+            String r = plain(value);
+            if (r.equals("ok")) {
+                exporting = true;
+                status.setText("已开始导出，先在读目录，稍等…");
+                main.postDelayed(this::pollProgress, 1500);
+            } else if (r.equals("jump")) {
+                status.setText("这一页不是目录页，正在跳到目录页。到了以后再点一次“导出这本书”。");
+            } else {
+                status.setText("导出脚本没有在这一页启动。先点“刷新”再试；还不行就把这行字截图发出来：" + (r.startsWith("no|") ? r.substring(3) : r));
+            }
+        });
+    }
+
+    // 把脚本自己的进度搬到提示行上（它原本显示在网页角落里，手机上很小）
+    private void pollProgress() {
+        if (!exporting || isDestroyed()) return;
+        web.evaluateJavascript("window.__sfProgress ? window.__sfProgress() : ''", value -> {
+            if (!exporting) return;
+            String p = plain(value);
+            if (!p.isEmpty()) status.setText("导出中　" + p + "　（别离开这一页）");
+            main.postDelayed(this::pollProgress, 1500);
+        });
     }
 
     private void switchUa() {
@@ -223,6 +272,7 @@ public class ScriptActivity extends Activity {
                     if (!registered) {
                         registered = true;
                         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                            WebViewCompat.addDocumentStartJavaScript(web, store.rulesJs(), Collections.singleton("*"));
                             WebViewCompat.addDocumentStartJavaScript(web, shim, Collections.singleton("*"));
                             for (String part : store.parts) WebViewCompat.addDocumentStartJavaScript(web, part, Collections.singleton("*"));
                         } else {
@@ -411,6 +461,10 @@ public class ScriptActivity extends Activity {
                         while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                     }
                     toast("已收进书架：" + f.name);
+                    main.post(() -> {
+                        exporting = false;
+                        status.setText("导出完成，《" + f.name.substring(0, f.name.length() - 4) + "》已收进书架。点“完成”回去看。");
+                    });
                 } else {
                     String lower = f.name.toLowerCase();
                     String mime = lower.endsWith(".epub") ? "application/epub+zip" : lower.endsWith(".zip") ? "application/zip" : "application/octet-stream";

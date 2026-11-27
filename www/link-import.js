@@ -1,190 +1,313 @@
-/* 只读取作品公开页面里实际列出的目录链接和文字。 */
+/* 导书：贴作品链接 → 认出平台和书 → 看书的信息和目录、选章节 → 下载 → 存进书架。
+   只收网页上直接给出的文字；VIP、加密字体之类的章节如实标出来，不导。 */
 (() => {
   "use strict";
-  const sites = {
-    "jjwxc.net": { name: "晋江", directory: 'tr[itemprop="chapter"]', title: 'h1[itemprop="name"]', body: "#paragraph_comment_content" },
-    "fanqienovel.com": { name: "番茄", directory: ".page-directory-content .chapter-item", title: ".info-name h1", body: ".muye-reader-content" },
-    "qidian.com": { name: "起点", directory: ".volume-wrap li, .volume li, .catalog-content-wrap li", title: ".book-info h1 em, h1", body: ".read-content" },
-    "ciweimao.com": { name: "刺猬猫", directory: ".book-chapter-list li", title: ".book-catalog h3, .book-info h1, .book-info h3, h1", body: "#J_BookRead" }
-  };
-  function bookUrl(value) {
-    const match = value.match(/https?:\/\/[^\s<>"「」【】《》，。！？）)]+/i);
-    if (!match) throw new Error("请粘贴作品详情页或目录页的网址。");
-    const u = new URL(match[0]);
-    const domain = u.hostname.replace(/^(www|m|wap)\./, "");
-    if (!Object.prototype.hasOwnProperty.call(sites, domain) || u.username || u.password || u.port) throw new Error("链接导书目前可识别晋江、起点、番茄和刺猬猫的作品网址。");
-    let id, path;
-    if (domain === "jjwxc.net") {
-      id = u.pathname === "/onebook.php" ? u.searchParams.get("novelid") : u.pathname.match(/^\/book2?\/(\d+)\/?$/)?.[1];
-      if (id && /^\d+$/.test(id)) path = "/onebook.php?novelid=" + id;
-    } else {
-      const pattern = domain === "fanqienovel.com" ? /^\/page\/(\d+)\/?$/ : /^\/(?:book|chapter-list)\/(\d+)(?:\/(?:catalog|book_detail)?)?\/?$/;
-      id = u.pathname.match(pattern)?.[1];
-      if (id) path = domain === "fanqienovel.com" ? "/page/" + id : domain === "ciweimao.com" ? "/chapter-list/" + id + "/" : "/book/" + id + "/catalog/";
-    }
-    if (!path) throw new Error("这个网址里没有可识别的作品编号，请从作品详情页复制链接。");
-    return { ...sites[domain], domain, id, url: "https://" + (domain === "fanqienovel.com" ? "" : "www.") + domain + path };
-  }
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+  const PRIVATE_USE = /[-]/;
 
-  async function readPage(url) {
-    let status, bytes;
-    if (NATIVE) {
-      const r = await Capacitor.nativePromise("CapacitorHttp", "request", {
-        method: "GET", url, responseType: "arraybuffer", disableRedirects: true, connectTimeout: 12000, readTimeout: 20000
-      });
-      status = r.status;
-      if (status === 200 && typeof r.data === "string") bytes = Uint8Array.from(atob(r.data), ch => ch.charCodeAt(0));
-    } else {
-      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 20000);
+  /* ---------------- 联网 ---------------- */
+  async function get(url, {redirect = true} = {}){
+    let r;
+    if (NATIVE){
       try {
-        const r = await fetch(url, { credentials: "omit", redirect: "error", signal: controller.signal });
-        status = r.status;
-        if (status === 200) bytes = new Uint8Array(await r.arrayBuffer());
-      } finally { clearTimeout(timer); }
+        r = await Capacitor.nativePromise("CapacitorHttp", "request", {
+          method:"GET", url, headers:{"User-Agent":UA, "Accept":"text/html,*/*"}, responseType:"arraybuffer",
+          disableRedirects:!redirect, connectTimeout:15000, readTimeout:30000
+        });
+      } catch(e){ throw new Error("连不上网站：" + ((e && e.message) || e)); }
+      const bytes = typeof r.data === "string" ? Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) : new Uint8Array(0);
+      const h = {}; for (const k in (r.headers || {})) h[k.toLowerCase()] = r.headers[k];
+      return {status:r.status, headers:h, bytes, url:r.url || url};
     }
-    if ([202, 401, 403, 429].includes(status)) throw new Error("网站要求验证、登录或暂缓访问（HTTP " + status + "）");
-    if (status !== 200 || !bytes) throw new Error("网站未返回公开页面（HTTP " + status + "）");
-    // template 内的外站标签保持惰性，不执行脚本，也不加载图片、字体或框架。
-    const template = document.createElement("template");
-    template.innerHTML = decode(bytes);
-    return template.content;
+    const res = await fetch(url, {redirect: redirect ? "follow" : "manual"});
+    return {status:res.status, headers:{location:res.headers.get("location") || ""}, bytes:new Uint8Array(await res.arrayBuffer()), url:res.url};
+  }
+  async function page(url){
+    const r = await get(url);
+    if ([202, 403, 429].includes(r.status)) throw new Error("网站要求人机验证或暂时不让访问（HTTP " + r.status + "）");
+    if (r.status !== 200) throw new Error("网站没有返回页面（HTTP " + r.status + "）");
+    const html = decode(r.bytes);
+    return {html, doc: new DOMParser().parseFromString(html, "text/html")};
+  }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const clean = s => String(s || "").replace(/ /g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  function textOf(node){
+    if (!node) return "";
+    const c = node.cloneNode(true);
+    c.querySelectorAll("script, style, noscript").forEach(n => n.remove());
+    c.querySelectorAll("br").forEach(n => n.replaceWith("\n"));
+    c.querySelectorAll("p, div, li").forEach(n => n.append("\n"));
+    return clean(c.textContent.split("\n").map(s => s.trim()).join("\n"));
   }
 
-  function chapterUrl(site, href) {
-    if (!href) return "";
-    let u;
-    try { u = new URL(href, site.url); } catch { return ""; }
-    if (!["http:", "https:"].includes(u.protocol) || u.port || u.username || u.password) return "";
-    if (u.hostname.replace(/^www\./, "") !== site.domain) return "";
-    if (site.domain === "jjwxc.net") {
-      const chapter = u.searchParams.get("chapterid");
-      if (u.pathname !== "/onebook.php" || u.searchParams.get("novelid") !== site.id || !/^\d+$/.test(chapter || "")) return "";
-      return site.url + "&chapterid=" + chapter;
+  /* ---------------- 各平台 ---------------- */
+  const PLATFORMS = {
+    jjwxc: {
+      name:"晋江",
+      match(u){
+        if (!/(^|\.)jjwxc\.(net|com)$/.test(u.hostname)) return null;
+        const id = u.searchParams.get("novelid") || (u.pathname.match(/\/book2\/(\d+)/) || [])[1];
+        return id && /^\d+$/.test(id) ? id : null;
+      },
+      async load(id){
+        const url = "https://www.jjwxc.net/onebook.php?novelid=" + id;
+        const {doc} = await page(url);
+        const q = s => doc.querySelector(s);
+        const title = (q('[itemprop="articleSection"]') || q('h1[itemprop="name"]'))?.textContent.trim();
+        if (!title) throw new Error("没在页面上找到书名，这本书可能被锁或者网址不对。");
+        const words = [...doc.querySelectorAll('[itemprop="wordCount"]')].map(n => n.textContent.trim()).find(t => /字/.test(t)) || "";
+        const chapters = [];
+        for (const row of doc.querySelectorAll('tr[itemprop~="chapter"]')){
+          const tds = row.querySelectorAll("td");
+          const num = parseInt(tds[0]?.textContent, 10);
+          const a = tds[1]?.querySelector("a");
+          const name = clean((a || tds[1])?.textContent).replace(/\s+/g, " ");
+          if (!num || !name) continue;
+          const href = a?.getAttribute("href") || "";
+          const vip = /onebook_vip/.test(a?.getAttribute("rel") || "") || /\[VIP\]/i.test(tds[1]?.textContent || "");
+          let state = "可导", why = "";
+          if (vip){ state = "不可导"; why = "VIP 章节（正文是加密字体）"; }
+          else if (!/chapterid=\d+/.test(href)){ state = "不可导"; why = "章节被锁或已删除"; }
+          chapters.push({num, name, note: clean(tds[2]?.textContent), state, why,
+            url: state === "可导" ? "https://www.jjwxc.net/onebook.php?novelid=" + id + "&chapterid=" + num : ""});
+        }
+        if (!chapters.length) throw new Error("没读到目录。");
+        return {
+          id, url, title,
+          author: q('[itemprop="author"]')?.textContent.trim() || "",
+          status: q('[itemprop="updataStatus"]')?.textContent.trim() || "",
+          words, intro: textOf(q("#novelintro")), chapters,
+          notice: chapters.some(c => c.why.startsWith("VIP")) ? "晋江的 VIP 章节正文用了加密字体，这里只导免费章节。" : ""
+        };
+      },
+      async chapter(ch){
+        const {doc} = await page(ch.url);
+        const body = doc.querySelector("#paragraph_comment_content");
+        if (!body) throw new Error("页面上没有正文");
+        const text = textOf(body);
+        if (!text) throw new Error("正文是空的");
+        if (PRIVATE_USE.test(text)) throw new Error("正文是加密字体");
+        let note = "";
+        const ns = doc.querySelector("#note_str");
+        if (ns){ const box = doc.createElement("div"); box.innerHTML = ns.innerHTML || ns.textContent; note = textOf(box); }
+        return {text, note};
+      }
+    },
+    fanqie: {
+      name:"番茄",
+      match(u){
+        if (/(^|\.)fanqienovel\.com$/.test(u.hostname)) return (u.pathname.match(/^\/page\/(\d+)/) || [])[1] || null;
+        if (/(^|\.)changdunovel\.com$/.test(u.hostname)) return u.searchParams.get("book_id") || null;
+        return null;
+      },
+      async load(id){
+        const url = "https://fanqienovel.com/page/" + id;
+        const {html} = await page(url);
+        const st = initialState(html), p = st && st.page;
+        if (!p || !p.bookName) throw new Error("没在页面上找到这本书的信息。");
+        const chapters = [];
+        (p.chapterListWithVolume || []).flat().forEach((c, i) => chapters.push({
+          num: parseInt(c.realChapterOrder, 10) || i + 1, name: c.title || ("第" + (i + 1) + "章"), state: "不可导",
+          why: c.isChapterLock || c.needPay ? "付费章节" : "网页正文是加密字体", url: "https://fanqienovel.com/reader/" + c.itemId
+        }));
+        return {
+          id, url, title: p.bookName, author: p.author || "", status: p.creationStatus === 0 ? "已完结" : "连载中",
+          words: p.wordNumber ? (p.wordNumber >= 10000 ? (p.wordNumber / 10000).toFixed(1) + " 万字" : p.wordNumber + " 字") : "",
+          intro: clean(p.abstract), chapters,
+          notice: "番茄网页版每一章的正文都换成了加密字体，自己做的导书读不出原文，所以这本只能看信息和目录。"
+        };
+      }
     }
-    const pattern = site.domain === "fanqienovel.com" ? /^\/reader\/\d+\/?$/ : site.domain === "ciweimao.com" ? /^\/chapter\/\d+\/?$/ : new RegExp("^/chapter/" + site.id + "/[0-9]+/?$");
-    return pattern.test(u.pathname) ? new URL(u.pathname, site.url).href : "";
-  }
-
-  function catalog(doc, site) {
-    const items = [], seen = new Set();
-    for (const row of doc.querySelectorAll(site.directory)) {
-      const a = row.querySelector('a[itemprop="url"], a[href*="chapterid="], a[href*="/reader/"], a[href*="/chapter/"]');
-      const label = a || row.querySelector('[itemprop="headline"], [itemprop="chapterName"], td:nth-child(2)');
-      const name = label?.textContent.trim();
-      if (!name) continue;
-      const url = chapterUrl(site, a?.getAttribute("href"));
-      if (url && seen.has(url)) continue;
-      seen.add(url);
-      const locked = !url || !!row.querySelector('.icon-lock, .iconfont-lock, [class*="vip" i], [title*="VIP" i], [alt*="VIP" i], [src*="/vip" i]') || /\bVIP\b|锁定章节|付费章节/i.test(label.textContent);
-      items.push({name, url, state: locked ? "目录标记受限" : "待导入"});
+  };
+  const UNSUPPORTED = [
+    [/(^|\.)qidian\.com$/, "起点打开就要人机验证，这里暂时取不到页面。"],
+    [/(^|\.)ciweimao\.com$/, "刺猬猫的正文是加密的，这里导不了。"]
+  ];
+  function initialState(html){
+    const i = html.indexOf("window.__INITIAL_STATE__=");
+    if (i < 0) return null;
+    // 从第一个 { 开始数括号，找到对应的 }，字符串里的括号不算
+    let s = html.indexOf("{", i), depth = 0, inStr = false, esc = false, end = -1;
+    for (let k = s; k < html.length; k++){
+      const ch = html[k];
+      if (inStr){ if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; continue; }
+      if (ch === '"') inStr = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0){ end = k + 1; break; }
     }
-    if (!items.length) throw new Error("没有读到公开目录，网站可能要求验证，或目录需要在网页里加载。");
-    const title = doc.querySelector('meta[property="og:novel:book_name"]')?.content || doc.querySelector(site.title)?.textContent.trim() || "作品 " + site.id;
-    return {title, items};
+    if (end < 0) return null;
+    try { return JSON.parse(html.slice(s, end).replace(/([:\[,])undefined(?=[,}\]])/g, "$1null")); } catch(e){ return null; }
   }
 
-  function chapterText(doc, site) {
-    const body = doc.querySelector(site.body);
-    if (!body) throw new Error("网页未提供可导出的正文");
-    if (doc.querySelector(".vip-limit-wrap, .subscribe-wrap, .read-limit, .paywall") ||
-        /购买本章|订阅本章|订阅后(?:可|继续)阅读|仅供试读|试读结束|本章为VIP章节|打开.{0,6}APP.{0,6}继续阅读/i.test(body.textContent))
-      throw new Error("需要订阅或仅有试读");
-    body.querySelectorAll("script, style, noscript, template, button, [hidden], [aria-hidden=true], .watermark, [style*='display:none' i], [style*='display: none' i]").forEach(n => n.remove());
-    body.querySelectorAll("br").forEach(n => n.replaceWith("\n"));
-    body.querySelectorAll("p, div").forEach(n => n.append("\n"));
-    const text = body.textContent.split(/\r?\n/).map(s => s.trim()).filter(Boolean).join("\n\n");
-    if (!text) throw new Error("网页没有直接提供文字");
-    if (/[\uE000-\uF8FF\uFFFD]/u.test(text)) throw new Error("正文含专用字体编码或乱码");
-    return text;
+  // 从贴进来的文字里找出网址，认出平台和书号；番茄分享短链要先问一下它跳到哪
+  async function recognize(input){
+    const m = String(input).match(/https?:\/\/[^\s<>"'「」【】《》，。！？）)]+/i);
+    if (!m) throw new Error("没找到网址。请粘贴作品详情页的链接，或 App 里“分享”复制出来的那段文字。");
+    let u = new URL(m[0]);
+    if (/(^|\.)changdunovel\.com$/.test(u.hostname) && /^\/t\//.test(u.pathname)){
+      const r = await get(u.href, {redirect:false});
+      const loc = r.headers.location;
+      if (!loc) throw new Error("这个分享短链打不开了（HTTP " + r.status + "）。");
+      u = new URL(loc, u.href);
+    }
+    for (const [re, msg] of UNSUPPORTED) if (re.test(u.hostname)) throw new Error(msg);
+    for (const key in PLATFORMS){
+      const id = PLATFORMS[key].match(u);
+      if (id) return {key, id};
+    }
+    throw new Error("认不出这个网址。目前能识别晋江、番茄的作品链接。");
   }
 
-  let job, busy = false, pause = false;
-  const status = $("linkStatus");
-  function controls() {
-    $("linkStart").disabled = busy;
-    $("bookLink").disabled = busy;
-    $("linkPause").hidden = !busy || !job;
-    $("linkSave").hidden = busy || !job?.count || !!job.saved;
-    $("linkDownload").hidden = busy || !job?.saved;
-    $("linkDetails").hidden = !job;
-    $("linkStart").textContent = job && !job.finished && job.input === $("bookLink").value.trim() ? "继续导入" : "解析并导入";
-  }
-  function report() {
-    if (job && $("linkDetails").open) $("linkChapters").textContent = job.items.map((x,i) => (i+1) + ". " + x.name + " · " + x.state).join("\n");
-  }
-  function resultName() {
-    return job.title + (job.count < job.items.length ? "（已导入 " + job.count + " 章）" : "");
-  }
-  async function saveBook() {
-    const text = [job.title, ...job.items.filter(x => x.text).map(x => x.name + "\n\n" + x.text)].join("\n\n");
-    await bookAdd(resultName(), text, job.key);
-    job.saved = true;
-    await loadBooks();
-  }
+  /* ---------------- 界面 ---------------- */
+  let book = null, run = null;
+  const ST = {wait:"·", ok:"✓", fail:"✗", skip:"—", busy:"…"};
+  function setStatus(id, t, kind){ const e = $(id); e.textContent = t; e.className = "note" + (kind ? " " + kind : ""); e.hidden = !t; }
 
-  $("bookLink").oninput = controls;
-  $("linkDetails").ontoggle = report;
-  $("linkPause").onclick = () => { pause = true; status.textContent = "正在收尾，当前章节读完后暂停。"; };
-  $("linkStart").onclick = async () => {
-    if (busy) return;
-    busy = true; pause = false;
-    const input = $("bookLink").value.trim();
+  $("bkRecognize").onclick = async () => {
+    const input = $("bkInput").value.trim();
+    if (!input){ setStatus("bkMsg", "先粘贴作品链接。", "warn"); return; }
+    if (run && run.active){ setStatus("bkMsg", "正在下载，先暂停或等它下完。", "warn"); return; }
+    $("bkRecognize").disabled = true; $("bkInfo").hidden = true; $("bkRun").hidden = true;
+    setStatus("bkMsg", "正在识别…");
     try {
-      if (job && job.input !== input) {
-        if (job.count && !job.saved) await saveBook();
-        job = null;
-        $("linkChapters").textContent = "";
-      }
-      const site = bookUrl(input);
-      if (!job || job.input !== input || job.finished) {
-        controls();
-        status.textContent = "正在读取" + site.name + "的公开目录…";
-        const data = catalog(await readPage(site.url), site);
-        job = {...data, input, next:0, count:0, key:"link-" + Date.now().toString(36) + Math.random().toString(36).slice(2), saved:false, finished:false};
-      }
-      controls();
-      let failures = 0;
-      while (job.next < job.items.length && !pause) {
-        const item = job.items[job.next];
-        if (item.state === "目录标记受限") { job.next++; continue; }
-        status.textContent = job.title + " · " + (job.next+1) + "/" + job.items.length + " · " + item.name;
-        try {
-          item.text = chapterText(await readPage(item.url), site);
-          item.state = "已读取"; job.count++; job.next++; job.saved = false; failures = 0;
-        } catch (e) {
-          item.state = e.message || "连接失败";
-          if (!/^(网页未提供|网页没有|需要订阅|正文含)/.test(item.state)) {
-            throw new Error(item.name + "：" + item.state + "。已暂停，可稍后继续。");
-          }
-          job.next++;
-          if (++failures >= 2 && job.next < job.items.length) {
-            status.textContent = "连续两章无法导入，已暂停：" + item.state + "。可查看章节详情或继续后续章节。";
-            report(); return;
+      const {key, id} = await recognize(input);
+      setStatus("bkMsg", "认出来了：" + PLATFORMS[key].name + "，正在读取书的信息和目录…");
+      book = await PLATFORMS[key].load(id);
+      book.key = key; book.platform = PLATFORMS[key].name;
+      showBook();
+      setStatus("bkMsg", "");
+    } catch(e){ setStatus("bkMsg", (e && e.message) || String(e), "warn"); }
+    $("bkRecognize").disabled = false;
+  };
+  $("bkInput").onkeydown = e => { if (e.key === "Enter") $("bkRecognize").click(); };
+
+  function showBook(){
+    const b = book, ok = b.chapters.filter(c => c.state === "可导").length;
+    $("bkTitle").textContent = b.title;
+    $("bkPlatform").textContent = b.platform;
+    $("bkMeta").textContent = [b.author && "作者：" + b.author, b.status, b.words, "目录 " + b.chapters.length + " 章"].filter(Boolean).join(" · ");
+    $("bkIntro").textContent = b.intro || "（没有简介）";
+    $("bkAvail").textContent = "可导出 " + ok + " 章，导不了 " + (b.chapters.length - ok) + " 章。";
+    setStatus("bkNotice", b.notice || "", b.notice ? "warn" : "");
+    const first = b.chapters.find(c => c.state === "可导"), last = [...b.chapters].reverse().find(c => c.state === "可导");
+    $("bkFrom").value = first ? first.num : 1; $("bkTo").value = last ? last.num : b.chapters.length;
+    $("bkFrom").max = $("bkTo").max = b.chapters[b.chapters.length - 1].num;
+    $("bkStart").disabled = !ok;
+    renderList($("bkList"), b.chapters.map(c => [c.state === "可导" ? "·" : "—", c.num, c.name, c.state === "可导" ? "" : c.why]));
+    countRange();
+    $("bkInfo").hidden = false;
+  }
+  function picked(){
+    const from = +$("bkFrom").value || 1, to = +$("bkTo").value || 1e9;
+    return book.chapters.filter(c => c.num >= Math.min(from, to) && c.num <= Math.max(from, to) && c.state === "可导");
+  }
+  function countRange(){ if (book) $("bkRange").textContent = "这个范围里能导 " + picked().length + " 章。"; }
+  $("bkFrom").oninput = $("bkTo").oninput = countRange;
+  $("bkAll").onclick = () => { $("bkFrom").value = book.chapters[0].num; $("bkTo").value = book.chapters[book.chapters.length - 1].num; countRange(); };
+
+  function renderList(box, rows, focus){
+    box.textContent = "";
+    const frag = document.createDocumentFragment();
+    let target = null;
+    rows.forEach((r, i) => {
+      const line = el("div", "ch" + (r[0] === "✗" ? " bad" : r[0] === "—" ? " off" : ""));
+      line.textContent = r[0] + " " + r[1] + "  " + r[2] + (r[3] ? "  （" + r[3] + "）" : "");
+      if (i === focus) target = line;
+      frag.append(line);
+    });
+    box.append(frag);
+    if (target) box.scrollTop = Math.max(0, target.offsetTop - box.offsetTop - 60);
+  }
+
+  $("bkStart").onclick = () => {
+    const list = picked();
+    if (!list.length){ setStatus("bkMsg", "这个范围里没有能导的章节。", "warn"); return; }
+    run = {book, list: list.map(c => Object.assign({}, c, {st:"wait", text:"", note:"", err:""})), next:0, active:false, stop:false, savedId:null};
+    $("bkInfo").hidden = true; $("bkRun").hidden = false; $("bkDone").hidden = true;
+    loop();
+  };
+  $("bkPause").onclick = () => { if (run){ run.stop = true; setStatus("bkRunMsg", "这一章下完就暂停…"); } };
+  $("bkResume").onclick = () => loop();
+  $("bkBack").onclick = () => { if (run && run.active) return; $("bkRun").hidden = true; if (book) $("bkInfo").hidden = false; };
+
+  function draw(){
+    const r = run, n = r.list.length, c = {ok:0, fail:0};
+    r.list.forEach(x => { if (x.st === "ok") c.ok++; else if (x.st === "fail") c.fail++; });
+    $("bkRunTitle").textContent = "《" + r.book.title + "》 " + r.book.platform;
+    $("bkCount").textContent = "已下载 " + c.ok + " / " + n + " 章" + (c.fail ? " · 失败 " + c.fail + " 章" : "");
+    $("bkBar").style.width = Math.round(100 * (c.ok + c.fail) / n) + "%";
+    renderList($("bkRunList"), r.list.map(x => [ST[x.st], x.num, x.name, x.st === "fail" ? x.err : ""]), Math.min(r.next, n - 1));
+    $("bkPause").hidden = !r.active;
+    $("bkResume").hidden = r.active || r.next >= n;
+    $("bkBack").hidden = r.active;
+  }
+
+  async function loop(){
+    const r = run;
+    if (!r || r.active) return;
+    r.active = true; r.stop = false;
+    const plat = PLATFORMS[r.book.key];
+    let streak = 0;
+    setStatus("bkRunMsg", "");
+    draw();
+    try {
+      while (r.next < r.list.length){
+        if (r.stop){ setStatus("bkRunMsg", "已暂停。点“继续”接着下。"); break; }
+        const ch = r.list[r.next];
+        ch.st = "busy"; draw();
+        setStatus("bkRunMsg", "正在下载：" + ch.name);
+        let tries = 0;
+        for (;;){
+          try {
+            const got = await plat.chapter(ch);
+            ch.text = got.text; ch.note = got.note || ""; ch.st = "ok"; streak = 0;
+            break;
+          } catch(e){
+            const msg = (e && e.message) || String(e);
+            // 网络问题多试两次；正文本身有问题就直接记失败
+            if (/连不上|HTTP 5|没有返回/.test(msg) && tries < 2){ tries++; await sleep(2500 * tries); continue; }
+            ch.st = "fail"; ch.err = msg; streak++;
+            break;
           }
         }
-        report();
-        if (!pause && job.next < job.items.length) await new Promise(r => setTimeout(r, 450));
+        r.next++;
+        draw();
+        if (streak >= 3){ setStatus("bkRunMsg", "连着 3 章没下成，先暂停了：" + ch.err + "。可以过一会儿点“继续”。", "warn"); break; }
+        if (r.next < r.list.length) await sleep(700 + Math.random() * 700);   // 慢一点，别给网站添负担
       }
-      job.finished = job.next === job.items.length;
-      if (job.finished && job.count && !job.saved) await saveBook();
-      const summary = "已读取 " + job.count + " 章，" + (job.next-job.count) + " 章未收录。";
-      status.textContent = job.finished ? summary + (job.saved ? "已存入书架。" : "展开章节可查看原因。") : "已暂停，" + summary;
-    } catch (e) {
-      status.textContent = e.message || "没有连上作品网站，请稍后再试。";
-    } finally { busy = false; report(); controls(); }
+    } finally {
+      r.active = false;
+    }
+    if (r.next >= r.list.length) await finish();
+    draw();
+  }
+
+  function composeText(r){
+    const b = r.book, parts = [b.title, "作者：" + (b.author || "未知") + "　来源：" + b.platform + "　" + b.url];
+    if (b.intro) parts.push("简介：\n" + b.intro);
+    for (const c of r.list){
+      if (c.st !== "ok") { parts.push(c.name + "\n\n（这一章没有导出：" + (c.err || "未下载") + "）"); continue; }
+      parts.push(c.name + "\n\n" + c.text + (c.note ? "\n\n作者有话说：\n" + c.note : ""));
+    }
+    const skipped = b.chapters.filter(c => c.state !== "可导");
+    if (skipped.length) parts.push("——\n以下 " + skipped.length + " 章没有导出：\n" + skipped.map(c => c.num + " " + c.name + "（" + c.why + "）").join("\n"));
+    return parts.join("\n\n\n") + "\n";
+  }
+  async function finish(){
+    const r = run, ok = r.list.filter(c => c.st === "ok").length;
+    if (!ok){ setStatus("bkRunMsg", "一章都没下成，没有存进书架。", "warn"); return; }
+    const name = r.book.title + (ok < r.book.chapters.length ? "（" + ok + " 章）" : "");
+    r.savedId = await bookAdd(name, composeText(r));
+    r.savedName = name;
+    setStatus("bkRunMsg", "下载完成，已存进书架：" + name, "ok");
+    $("bkDone").hidden = false;
+    try { await loadBooks(); } catch(e){}
+  }
+  $("bkSaveTxt").onclick = async () => {
+    if (!run || !run.savedId) return;
+    try { setStatus("bkRunMsg", await fileOut("save", safe(run.savedName) + ".txt", composeText(run)), "ok"); }
+    catch(e){ setStatus("bkRunMsg", "没存成：" + ((e && e.message) || e), "warn"); }
   };
-  $("linkSave").onclick = async () => {
-    if (busy || !job?.count) return;
-    busy = true; controls();
-    try { await saveBook(); status.textContent = "已将 " + job.count + " 章存入书架。"; }
-    catch (e) { status.textContent = "书架保存失败：" + e.message; }
-    finally { busy = false; controls(); }
-  };
-  $("linkDownload").onclick = async () => {
-    if (busy || !job?.saved) return;
-    busy = true; controls();
-    try { status.textContent = await fileOut("save", safe(resultName()) + ".txt", await bookText(job.key)); }
-    catch (e) { status.textContent = "文件保存失败：" + e.message; }
-    finally { busy = false; controls(); }
-  };
+  $("bkMakeCard").onclick = () => { if (!run || !run.savedId) return; show("card"); $("cardBook").value = run.savedId; $("cardBook").onchange && $("cardBook").onchange(); };
+  $("bkShelf").onclick = () => show("shelf");
 })();

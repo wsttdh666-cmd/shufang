@@ -62,6 +62,12 @@ nav{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:
 nav div{display:flex;width:100%;max-width:680px}
 nav button{flex:1;border:0;border-radius:0;min-height:58px;font-size:14px;background:transparent;color:var(--mute);padding:6px 2px}
 nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:inset 0 3px 0 var(--accent)}
+.chlist{max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--bg);font-size:13px;line-height:1.7}
+.chlist .ch{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chlist .ch.off{color:var(--mute)}
+.chlist .ch.bad{color:var(--warn)}
+.intro{white-space:pre-wrap;font-size:14px;margin:6px 0 0}
+#bkPlatform{margin-right:8px}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -85,32 +91,37 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
 <!-- ============ 导书 ============ -->
 <div class="view" id="v-export" hidden>
   <section>
-    <h2>粘贴链接导书</h2>
-    <label for="bookLink">作品链接或分享文案<input type="text" id="bookLink" placeholder="粘贴起点、晋江、番茄或刺猬猫的作品链接" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-    <div class="row fill"><button class="primary" id="linkStart">解析并导入</button><button id="linkPause" hidden>暂停</button></div>
-    <p class="hint" id="linkStatus" role="status">按目录顺序收录网页公开提供的文字，完成后可直接下载 TXT。</p>
-    <details id="linkDetails" hidden><summary>查看章节</summary><pre class="log" id="linkChapters"></pre></details>
-    <div class="row fill"><button id="linkSave" hidden>收下已读取的章节</button><button id="linkDownload" hidden>下载 TXT</button></div>
+    <label for="bkInput">作品链接，或 App 里“分享”复制的文字<input type="text" id="bkInput" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go"></label>
+    <div class="row fill"><button class="primary" id="bkRecognize">识别</button></div>
+    <p class="note" id="bkMsg" role="status" hidden></p>
+    <p class="hint">目前能识别晋江和番茄的链接。晋江可以导免费章节；番茄网页版正文是加密的，只能看信息和目录。</p>
   </section>
-  <section>
-    <h2>站内浏览器</h2>
-    <p class="hint">会打开一个站内浏览器。在里面登录，再打开书的详情页（有目录的那一页），页面上会出现下载图标，点它开始导出。章节能否导出取决于平台提供的内容。</p>
+
+  <section id="bkInfo" hidden>
+    <h2 id="bkTitle"></h2>
+    <p class="hint"><span class="tag" id="bkPlatform"></span><span id="bkMeta"></span></p>
+    <details><summary>简介</summary><p class="intro" id="bkIntro"></p></details>
+    <p class="note" id="bkNotice" hidden></p>
+    <p id="bkAvail"></p>
     <div class="grid">
-      <button data-site="https://www.qidian.com/">起点</button>
-      <button data-site="https://www.jjwxc.net/">晋江</button>
-      <button data-site="https://fanqienovel.com/">番茄</button>
-      <button data-site="https://www.ciweimao.com/">刺猬猫</button>
+      <label for="bkFrom">从第几章<input type="number" id="bkFrom" min="1" inputmode="numeric"></label>
+      <label for="bkTo">到第几章<input type="number" id="bkTo" min="1" inputmode="numeric"></label>
     </div>
-    <label for="siteUrl">或者直接贴书的网址<input type="text" id="siteUrl" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-    <div class="row fill"><button id="openSite">打开这个网址</button></div>
-    <p class="hint" id="exportMsg"></p>
+    <div class="row"><button class="small" id="bkAll">全部</button><span class="hint" id="bkRange"></span></div>
+    <div class="chlist" id="bkList"></div>
+    <div class="row fill"><button class="primary" id="bkStart">开始下载</button></div>
   </section>
-  <section>
-    <h2>要知道的事</h2>
-    <p class="hint">第一次用站内浏览器导出时，要下载导出工具，有十几兆，可能要等一两分钟，之后就不用了。</p>
-    <p class="hint">站内浏览器使用开源脚本“小说下载器”，它支持的网站都能用，规则由它的作者维护。某个网站导不出来时，多半是网站改版了，要等脚本更新。</p>
-    <p class="hint">一次导一本，别连着导很多，太频繁可能被网站限制。</p>
-    <p class="hint">页面是电脑版的，字小可以双指放大；上面一排有“换成手机版”。</p>
+
+  <section id="bkRun" hidden>
+    <h2 id="bkRunTitle"></h2>
+    <p id="bkCount"></p>
+    <div class="bar"><i id="bkBar"></i></div>
+    <p class="note" id="bkRunMsg" hidden></p>
+    <div class="row fill"><button id="bkPause">暂停</button><button class="primary" id="bkResume" hidden>继续</button><button id="bkBack" hidden>返回选章节</button></div>
+    <div class="chlist" id="bkRunList"></div>
+    <div id="bkDone" hidden>
+      <div class="row fill"><button class="primary" id="bkSaveTxt">保存 TXT 到手机</button><button id="bkMakeCard">拿去做角色卡</button><button id="bkShelf">去书架</button></div>
+    </div>
   </section>
 </div>
 
@@ -207,7 +218,7 @@ const VER = 0;
 const RELEASE = "https://github.com/wsttdh666-cmd/shufang/releases/latest/download/";
 const NATIVE = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
 const $ = id => document.getElementById(id);
-const TITLES = {search:"搜书", export:"平台导书", shelf:"书架", card:"制作角色卡", keys:"密钥管理"};
+const TITLES = {search:"搜书", export:"导书", shelf:"书架", card:"制作角色卡", keys:"密钥管理"};
 const TYPES = ["角色","地点","势力","物品","设定","事件"];
 const GENERIC = new Set("师父 师傅 师尊 师兄 师姐 师弟 师妹 少爷 公子 小姐 姑娘 老大 大哥 大姐 哥哥 姐姐 弟弟 妹妹 父亲 母亲 爹 娘 爸爸 妈妈 老师 先生 夫人 殿下 陛下 大人 主人 少主 老板 队长 前辈 道友 小子 丫头 老头 男主 女主 主角".split(" "));
 const BATCH = 12;
@@ -520,38 +531,11 @@ function cardInfo(){
 }
 $("cSize").oninput = $("cMax").oninput = cardInfo;
 
-/* ---------- 导书: 打开站内浏览器, 回来后把导出的 txt 收进书架 ---------- */
-function browse(url){
-  if (!NATIVE){ $("exportMsg").textContent = "这个功能只能在 App 里用。"; return; }
-  if (!/^https?:\/\//i.test(url)){ $("exportMsg").textContent = "网址要以 http:// 或 https:// 开头。"; return; }
-  $("exportMsg").textContent = "";
-  Capacitor.nativePromise("AppTools", "browse", {url}).catch(e => { $("exportMsg").textContent = "打不开："+((e && e.message) || e); });
-}
-for (const b of document.querySelectorAll("[data-site]")) b.onclick = () => browse(b.dataset.site);
-$("openSite").onclick = () => browse($("siteUrl").value.trim());
-let pulling = false;
-async function pullInbox(){
-  if (!NATIVE || pulling) return; pulling = true;
-  try{
-    const r = await Capacitor.nativePromise("AppTools", "inbox", {}), list = (r && r.list) || []; let n = 0;
-    for (const f of list){
-      if (!f || !String(f.text||"").trim()) continue;
-      await bookAdd(String(f.name).replace(/\.txt$/i,""), String(f.text));
-      await Capacitor.nativePromise("AppTools", "inboxDone", {name:String(f.name)});
-      n++;
-    }
-    if (n){ const m = "收到 "+n+" 本导出的书，已放进书架。"; $("exportMsg").textContent = m; $("shelfMsg").textContent = m; loadBooks(); }
-  }catch(e){ $("exportMsg").textContent = "导出的书没收进来："+((e && e.message) || e); }
-  pulling = false;
-}
-document.addEventListener("visibilitychange", () => { if (!document.hidden) pullInbox(); });
-
 /* ---------- 标签切换 ---------- */
 function show(v){
   for (const b of document.querySelectorAll("nav button")){ const on = b.dataset.v===v; b.setAttribute("aria-selected", on); $("v-"+b.dataset.v).hidden = !on; }
   $("title").textContent = TITLES[v]; window.scrollTo(0,0);
   if (v==="shelf" || v==="card") loadBooks();
-  if (v==="shelf" || v==="export") pullInbox();
 }
 for (const b of document.querySelectorAll("nav button")) b.onclick = () => show(b.dataset.v);
 
@@ -786,7 +770,6 @@ if (NATIVE){
     if (!getComputedStyle(document.documentElement).getPropertyValue("--safe-area-inset-top").trim() && !envTop) document.documentElement.style.setProperty("--top", "36px");
   }, 700);
 }
-pullInbox();
 if (NATIVE && VER) checkUpdate().then(m => { if (LATEST > VER) $("updMsg").textContent = m; });
 </script>
 <script src="link-import.js"></script>

@@ -24,7 +24,18 @@
     const html = decode(r.bytes);
     return {html, doc: new DOMParser().parseFromString(html, "text/html")};
   }
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // VIP 章节：用隐藏 WebView 渲染页面（等 JS 加载完正文），拿到完整 HTML 后解析
+  async function vipPage(url){
+    if (!NATIVE) throw new Error("VIP 章节只能在 App 里下载");
+    let r;
+    try { r = await Capacitor.nativePromise("AppTools", "getRendered", {url, ua:UA, timeout:25000}); }
+    catch(e){ throw new Error("VIP 正文加载失败：" + ((e && e.message) || e)); }
+    if (r.unbought) return {html:"", doc:null, unbought:true};
+    if (!r.data) throw new Error("VIP 页面没有返回内容");
+    const html = decode(Uint8Array.from(atob(r.data), c => c.charCodeAt(0)));
+    return {html, doc: new DOMParser().parseFromString(html, "text/html")};
+  }
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
   const wanzi = n => n >= 10000 ? (n / 10000).toFixed(1) + " 万字" : n + " 字";
   const clean = s => String(s || "").replace(/ /g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   function textOf(node){
@@ -77,11 +88,34 @@
           words, intro: textOf(q("#novelintro")), chapters,
           encrypted: LOGIN.jjwxc && chapters.some(c => c.vip),
           notice: !chapters.some(c => c.vip) ? ""
-            : LOGIN.jjwxc ? "VIP 章节下载的是网页原样（加密字体，一部分字会显示成空白或方框），不做还原。没买的章节晋江网页不给正文，会标成“未购买”，txt 里保留章节名。"
-            : "这本有 VIP 章节。登录晋江后，买过的 VIP 章节也能下（网页原样，加密字体）。"
+            : LOGIN.jjwxc ? "VIP 章节会用渲染模式下载（每章稍慢）。正文是加密字体，部分字显示为空白或方框。没买的章节会标成“未购买”。"
+            : "这本有 VIP 章节。登录晋江后，买过的 VIP 章节也能下（加密字体原样）。"
         };
       },
       async chapter(ch){
+        // VIP 章节用隐藏 WebView 渲染，等 JS 加载完正文
+        if (ch.vip && NATIVE) {
+          const vr = await vipPage(ch.url);
+          if (vr.unbought) return {text:"", note:"", unbought:true};
+          const {doc, html} = vr;
+          let body = doc.querySelector("#paragraph_comment_content");
+          if (!body) {
+            const box = doc.querySelector(".noveltext");
+            if (box) {
+              body = box.cloneNode(true);
+              body.querySelectorAll("[id^=favorite], #report_box, .float_favorite, #mongolia_layer, h2, script, style, div[align=center], [style*='display:none' i], [style*='display: none' i], .readsmall, #note_danmu_wrapper").forEach(n => n.remove());
+            }
+          }
+          if (!body) throw new Error("页面渲染后仍找不到正文");
+          const text = textOf(body);
+          if (!text) throw new Error("渲染后正文是空的");
+          let note = "";
+          const ns = doc.querySelector("#note_str");
+          if (ns){ const box = doc.createElement("div"); box.innerHTML = ns.innerHTML || ns.textContent; note = textOf(box); }
+          const comments = ch.cmt > 0 ? await jjComments(ch, note) : null;
+          return {text, note, comments};
+        }
+        // 非 VIP 章节或非 App 环境，用原来的静态 HTTP
         const {doc, html} = await page(ch.url);
         if (/浏览器标识异常/.test(html)) throw new Error("晋江拦了这次请求（浏览器标识异常）。重新登录晋江、且下载时别同时开官方晋江 App");
         if (/vip内容加载失败|vip内容加载中/.test(html)) throw new Error("这章 VIP 正文晋江只在网页里用脚本动态加载，静态抓不到（返回的是“加载失败”占位），没法导出");

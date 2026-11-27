@@ -33,6 +33,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import android.webkit.CookieManager;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.webkit.WebChromeClient;
 
 // 网页那边够不着的几件事：装新版本、把文件存到手机里、把文件发给别的 App、用浏览器打开链接
 @CapacitorPlugin(name = "AppTools")
@@ -282,4 +286,106 @@ public class AppToolsPlugin extends Plugin {
             call.reject("手机上没有能打开这个链接的 App");
         }
     }
+
+    // 用隐藏的 WebView 渲染页面，等 JS 加载完后提取正文。VIP 章节的正文靠 JS 动态加载，普通 HTTP 拿不到。
+    @PluginMethod
+    public void getRendered(PluginCall call) {
+        final String url = call.getString("url", "");
+        final String ua = call.getString("ua", "");
+        final int timeout = call.getInt("timeout", 20000);
+        new Handler(Looper.getMainLooper()).post(() -> {
+            final WebView wv = new WebView(getContext());
+            WebSettings s = wv.getSettings();
+            s.setJavaScriptEnabled(true);
+            s.setDomStorageEnabled(true);
+            s.setBlockNetworkImage(true);  // 不加载图片，省流量加快速度
+            if (ua != null && !ua.isEmpty()) s.setUserAgentString(ua);
+            CookieManager.getInstance().setAcceptCookie(true);
+            CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true);
+            final boolean[] done = {false};
+            final Handler h = new Handler(Looper.getMainLooper());
+            // 超时
+            h.postDelayed(() -> {
+                if (!done[0]) { done[0] = true; wv.stopLoading(); wv.destroy(); call.reject("\u9875\u9762\u52a0\u8f7d\u8d85\u65f6"); }
+            }, timeout);
+            wv.setWebChromeClient(new WebChromeClient());
+            wv.setWebViewClient(new WebViewClient() {
+                @Override
+                public void onPageFinished(WebView view, String pageUrl) {
+                    if (done[0]) return;
+                    // \u7b49\u9875\u9762 JS \u8dd1\u5b8c\uff0c\u8f6e\u8be2\u63d0\u53d6\u6b63\u6587
+                    pollContent(wv, call, done, h, 0);
+                }
+            });
+            wv.loadUrl(url);
+        });
+    }
+
+    private void pollContent(WebView wv, PluginCall call, boolean[] done, Handler h, int attempt) {
+        if (done[0]) return;
+        // \u5728 WebView \u91cc\u8dd1 JS\uff0c\u63d0\u53d6\u6e32\u67d3\u540e\u7684\u9875\u9762 HTML
+        String js = "(function(){" +
+            "var nt=document.querySelector('.noveltext');" +
+            "if(!nt)return JSON.stringify({s:'no_el'});" +
+            "var t=nt.textContent||'';" +
+            "if(t.indexOf('\u52a0\u8f7d\u4e2d')>=0||t.indexOf('loading')>=0)return JSON.stringify({s:'loading'});" +
+            "if(t.indexOf('\u52a0\u8f7d\u5931\u8d25')>=0)return JSON.stringify({s:'failed'});" +
+            "if(t.indexOf('\u8d2d\u4e70')>=0&&t.indexOf('\u8ba2\u9605\u672c\u7ae0')>=0&&t.length<400)return JSON.stringify({s:'unbought'});" +
+            "return JSON.stringify({s:'ok',html:document.documentElement.outerHTML});" +
+            "})()";
+        wv.evaluateJavascript(js, value -> {
+            if (done[0]) return;
+            try {
+                // evaluateJavascript \u8fd4\u56de\u7684\u662f JSON \u7f16\u7801\u7684\u5b57\u7b26\u4e32
+                if (value == null || value.equals("null")) throw new Exception("null");
+                // \u53bb\u6389\u5916\u5c42\u5f15\u53f7\u5e76\u53cd\u8f6c\u4e49
+                String json = value;
+                if (json.startsWith("\"") && json.endsWith("\"")) {
+                    json = json.substring(1, json.length() - 1)
+                        .replace("\\\"", "\"")
+                        .replace("\\n", "\n")
+                        .replace("\\t", "\t")
+                        .replace("\\u003c", "<")
+                        .replace("\\u003e", ">")
+                        .replace("\\u0026", "&")
+                        .replace("\\\\", "\\");
+                }
+                org.json.JSONObject obj = new org.json.JSONObject(json);
+                String status = obj.optString("s", "");
+                if (status.equals("ok")) {
+                    done[0] = true;
+                    String html = obj.optString("html", "");
+                    wv.destroy();
+                    call.resolve(new JSObject()
+                        .put("status", 200)
+                        .put("data", Base64.encodeToString(html.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP))
+                        .put("url", wv.getUrl() != null ? wv.getUrl() : ""));
+                } else if (status.equals("unbought")) {
+                    done[0] = true;
+                    wv.destroy();
+                    call.resolve(new JSObject().put("status", 200).put("unbought", true).put("data", ""));
+                } else if (status.equals("failed")) {
+                    done[0] = true;
+                    wv.destroy();
+                    call.reject("VIP \u6b63\u6587\u52a0\u8f7d\u5931\u8d25");
+                } else if (attempt < 20) {
+                    // \u8fd8\u5728\u52a0\u8f7d\uff0c500ms \u540e\u518d\u8bd5
+                    h.postDelayed(() -> pollContent(wv, call, done, h, attempt + 1), 500);
+                } else {
+                    done[0] = true;
+                    wv.destroy();
+                    call.reject("\u7b49\u4e86\u5f88\u4e45\uff0c\u9875\u9762\u91cc\u6ca1\u6709\u51fa\u73b0\u6b63\u6587");
+                }
+            } catch (Exception e) {
+                if (attempt < 20) {
+                    h.postDelayed(() -> pollContent(wv, call, done, h, attempt + 1), 500);
+                } else {
+                    done[0] = true;
+                    wv.destroy();
+                    call.reject("\u63d0\u53d6\u5931\u8d25\uff1a" + e.getMessage());
+                }
+            }
+        });
+    }
+
 }

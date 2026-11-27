@@ -56,6 +56,8 @@ public class ScriptActivity extends Activity {
     private static final String TIP_READY = "登录后打开书的详情页（有目录的那一页），这里会出现“导出这本书”按钮。";
     private static final String TIP_BOOK = "这一页可以导出：点下面的“导出这本书”。导出的 txt 会自动进书架。";
 
+    private static final Pattern SECURE = Pattern.compile("(^|\\.)(jjwxc\\.(net|com)|qidian\\.com|fanqienovel\\.com|ciweimao\\.com|yuewen\\.com)$");
+
     private WebView web;
     private TextView status;
     private Button uaButton, exportButton;
@@ -165,6 +167,12 @@ public class ScriptActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
                 String scheme = uri.getScheme() == null ? "" : uri.getScheme();
+                // 这些站都支持加密连接，碰到 http 链接就换成 https 再打开
+                String host = uri.getHost() == null ? "" : uri.getHost();
+                if (scheme.equals("http") && request.isForMainFrame() && SECURE.matcher(host).find()) {
+                    view.loadUrl(uri.buildUpon().scheme("https").build().toString());
+                    return true;
+                }
                 if (scheme.equals("http") || scheme.equals("https")) return false;
                 // 微信、QQ 登录这类会跳到别的 App
                 try {

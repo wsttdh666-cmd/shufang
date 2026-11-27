@@ -131,8 +131,8 @@
     var names = ["CryptoJS", "fflate", "nunjucks", "Vue", "eSearchOCR", "ort", "csstree", "cv", "mdui"], missing = [];
     for (var i = 0; i < names.length; i++) if (typeof window[names[i]] === "undefined") missing.push(names[i]);
     return "no|" + JSON.stringify({
-      接口: typeof window.ShufangBridge, 缺组件: missing.join(","), 脚本界面: !!document.querySelector("#nd-shadow-host"),
-      页面状态: document.readyState, 报错: window.__sfErr || ""
+      版本: window.__sfApp || "", 接口: typeof window.ShufangBridge, 缺组件: missing.join(","), 等组件: window.__sfWait || "",
+      脚本界面: !!document.querySelector("#nd-shadow-host"), 页面状态: document.readyState, 报错: window.__sfErr || ""
     });
   };
   window.__sfProgress = function () {

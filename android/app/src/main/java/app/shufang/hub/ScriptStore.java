@@ -126,9 +126,14 @@ public class ScriptStore {
             parts.add("if(window.__sfRun){try{\n" + new String(read(f), StandardCharsets.UTF_8) + "\n" + tail
                 + "\n}catch(e){if(!window.__sfErr)window.__sfErr='组件出错 " + (i + 1) + "：'+e}}");
         }
-        parts.add("if(window.__sfRun){(function(GM_info,GM_xmlhttpRequest,GM_setValue,GM_getValue,GM_deleteValue,GM,unsafeWindow){\n"
+        // 脚本启动前先确认组件都在；不在就每 0.1 秒等一下，最多 30 秒。这样不管浏览器先跑哪段都不会出错。
+        StringBuilder names = new StringBuilder();
+        for (String g : GLOBALS) names.append(names.length() > 0 ? "," : "").append('"').append(g).append('"');
+        parts.add("if(window.__sfRun){(function(){var need=[" + names + "],n=0;function missing(){for(var i=0;i<need.length;i++)if(typeof window[need[i]]==='undefined')return need[i];return '';}"
+            + "function go(){var m=missing();if(m&&n<300){n++;window.__sfWait=n+'次，在等'+m;setTimeout(go,100);return;}window.__sfWait=n+'次'+(m?'，没等到'+m:'');"
+            + "(function(GM_info,GM_xmlhttpRequest,GM_setValue,GM_getValue,GM_deleteValue,GM,unsafeWindow){\n"
             + script
-            + "\n}).call(window,__sfGM.info,__sfGM.xhr,__sfGM.setValue,__sfGM.getValue,__sfGM.deleteValue,__sfGM.GM,window);}");
+            + "\n}).call(window,__sfGM.info,__sfGM.xhr,__sfGM.setValue,__sfGM.getValue,__sfGM.deleteValue,__sfGM.GM,window);}go();})();}");
     }
 
     private static void add(List<Pattern> list, List<String> sources, String rule) {

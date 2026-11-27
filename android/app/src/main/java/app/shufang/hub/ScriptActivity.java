@@ -272,7 +272,14 @@ public class ScriptActivity extends Activity {
                 store.prepare(this, text -> main.post(() -> status.setText(text)));
                 // 规则、垫片、各个组件、脚本本身，按这个顺序拼成一整段。
                 // 分开交给浏览器的话它不保证先后，脚本会抢在组件前面跑，一启动就找不到组件。
-                StringBuilder sb = new StringBuilder(store.rulesJs()).append('\n').append(shim);
+                String appVer;
+                try {
+                    appVer = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+                } catch (Exception e) {
+                    appVer = "?";
+                }
+                String mode = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) ? "开头注入" : "旧方式";
+                StringBuilder sb = new StringBuilder("window.__sfApp='第" + appVer + "版/" + mode + "';\n").append(store.rulesJs()).append('\n').append(shim);
                 for (String part : store.parts) sb.append('\n').append(part);
                 final String built = sb.toString();
                 store.parts.clear();

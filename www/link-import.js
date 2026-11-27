@@ -34,6 +34,17 @@
     const html = decode(Uint8Array.from(atob(r.data), c => c.charCodeAt(0)));
     return {html, doc: new DOMParser().parseFromString(html, "text/html")};
   }
+  // 晋江字体还原：从渲染后的 HTML 拿到字体，把正文/作者话里的私用区码位换回真字。
+  // 失败就原样返回（不改坏）。整本书会命中字体缓存。
+  async function jjRestore(html, text, note){
+    try {
+      if (!window.JJFont) return {text, note};
+      const dec = await JJFont.forHtml(html);
+      if (!dec) return {text, note};
+      return {text: dec.decode(text), note: note ? dec.decode(note) : note};
+    } catch(e){ return {text, note}; }
+  }
+
     const sleep = ms => new Promise(r => setTimeout(r, ms));
   const wanzi = n => n >= 10000 ? (n / 10000).toFixed(1) + " 万字" : n + " 字";
   const clean = s => String(s || "").replace(/ /g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -176,7 +187,7 @@
           words, intro: textOf(q("#novelintro")), chapters,
           encrypted: LOGIN.jjwxc && chapters.some(c => c.vip),
           notice: !chapters.some(c => c.vip) ? ""
-            : LOGIN.jjwxc ? "VIP 章节会用渲染模式下载（每章稍慢）。正文是加密字体，部分字显示为空白或方框。没买的章节会标成“未购买”。"
+            : LOGIN.jjwxc ? "VIP 章节会用渲染模式下载（每章稍慢），正文里的加密字体会自动还原成正常文字（个别字可能还原不准）。没买的章节会标成“未购买”。"
             : "这本有 VIP 章节。登录晋江后，买过的 VIP 章节也能下（加密字体原样）。"
         };
       },
@@ -201,7 +212,8 @@
           const ns = doc.querySelector("#note_str");
           if (ns){ const box = doc.createElement("div"); box.innerHTML = ns.innerHTML || ns.textContent; note = textOf(box); }
           const comments = ch.cmt > 0 ? await jjComments(ch, note) : null;
-          return {text, note, comments};
+          const r = await jjRestore(html, text, note);
+          return {text: r.text, note: r.note, comments};
         }
         // 非 VIP 章节或非 App 环境，用原来的静态 HTTP
         const {doc, html} = await page(ch.url);
@@ -222,7 +234,8 @@
         const ns = doc.querySelector("#note_str");
         if (ns){ const box = doc.createElement("div"); box.innerHTML = ns.innerHTML || ns.textContent; note = textOf(box); }
         const comments = ch.cmt > 0 ? await jjComments(ch, note) : null;
-        return {text, note, comments};
+        const r = await jjRestore(html, text, note);
+        return {text: r.text, note: r.note, comments};
       }
     },
     fanqie: {

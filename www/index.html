@@ -84,15 +84,25 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
 
 <!-- ============ 导书 ============ -->
 <div class="view" id="v-export" hidden>
-  <p class="note">平台导书还在做，下一版放出来。现在这一页先告诉你计划和临时办法。</p>
   <section>
-    <h2>起点、晋江<small>下一版</small></h2>
-    <p class="hint">做法：在 App 里打开网站，你自己正常登录，然后 App 在页面里运行开源的“小说下载器”脚本，导出的 txt 直接收进书架，买过的章节也在内。</p>
-    <p class="hint">在那之前：用装了油猴的手机浏览器跑同一个脚本导出 txt，再到“书架”导入。</p>
+    <h2>从平台导出<small>导出的 txt 自动进书架</small></h2>
+    <p class="hint">会打开一个站内浏览器。在里面登录，再打开书的详情页（有目录的那一页），页面上会出现下载图标，点它开始导出。登录后，买过的章节也能导。</p>
+    <div class="grid">
+      <button data-site="https://www.qidian.com/">起点</button>
+      <button data-site="https://www.jjwxc.net/">晋江</button>
+      <button data-site="https://fanqienovel.com/">番茄</button>
+      <button data-site="https://www.ciweimao.com/">刺猬猫</button>
+    </div>
+    <label for="siteUrl">或者直接贴书的网址<input type="text" id="siteUrl" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <div class="row fill"><button id="openSite">打开这个网址</button></div>
+    <p class="hint" id="exportMsg"></p>
   </section>
   <section>
-    <h2>番茄<small>还没有确定的办法</small></h2>
-    <p class="hint">上面那个脚本不支持番茄。先用别的工具导出 txt，再到“书架”导入。</p>
+    <h2>要知道的事</h2>
+    <p class="hint">第一次用要下载导出工具，有十几兆，可能要等一两分钟，之后就不用了。</p>
+    <p class="hint">导出靠的是开源脚本“小说下载器”，它支持的网站都能用，规则由它的作者维护。某个网站导不出来时，多半是网站改版了，要等脚本更新。</p>
+    <p class="hint">一次导一本，别连着导很多，太频繁可能被网站限制。</p>
+    <p class="hint">页面是电脑版的，字小可以双指放大；上面一排有“换成手机版”。</p>
   </section>
 </div>
 
@@ -502,11 +512,38 @@ function cardInfo(){
 }
 $("cSize").oninput = $("cMax").oninput = cardInfo;
 
+/* ---------- 导书: 打开站内浏览器, 回来后把导出的 txt 收进书架 ---------- */
+function browse(url){
+  if (!NATIVE){ $("exportMsg").textContent = "这个功能只能在 App 里用。"; return; }
+  if (!/^https?:\/\//i.test(url)){ $("exportMsg").textContent = "网址要以 http:// 或 https:// 开头。"; return; }
+  $("exportMsg").textContent = "";
+  Capacitor.nativePromise("AppTools", "browse", {url}).catch(e => { $("exportMsg").textContent = "打不开："+((e && e.message) || e); });
+}
+for (const b of document.querySelectorAll("[data-site]")) b.onclick = () => browse(b.dataset.site);
+$("openSite").onclick = () => browse($("siteUrl").value.trim());
+let pulling = false;
+async function pullInbox(){
+  if (!NATIVE || pulling) return; pulling = true;
+  try{
+    const r = await Capacitor.nativePromise("AppTools", "inbox", {}), list = (r && r.list) || []; let n = 0;
+    for (const f of list){
+      if (!f || !String(f.text||"").trim()) continue;
+      await bookAdd(String(f.name).replace(/\.txt$/i,""), String(f.text));
+      await Capacitor.nativePromise("AppTools", "inboxDone", {name:String(f.name)});
+      n++;
+    }
+    if (n){ const m = "收到 "+n+" 本导出的书，已放进书架。"; $("exportMsg").textContent = m; $("shelfMsg").textContent = m; loadBooks(); }
+  }catch(e){ $("exportMsg").textContent = "导出的书没收进来："+((e && e.message) || e); }
+  pulling = false;
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pullInbox(); });
+
 /* ---------- 标签切换 ---------- */
 function show(v){
   for (const b of document.querySelectorAll("nav button")){ const on = b.dataset.v===v; b.setAttribute("aria-selected", on); $("v-"+b.dataset.v).hidden = !on; }
   $("title").textContent = TITLES[v]; window.scrollTo(0,0);
   if (v==="shelf" || v==="card") loadBooks();
+  if (v==="shelf" || v==="export") pullInbox();
 }
 for (const b of document.querySelectorAll("nav button")) b.onclick = () => show(b.dataset.v);
 
@@ -741,6 +778,7 @@ if (NATIVE){
     if (!getComputedStyle(document.documentElement).getPropertyValue("--safe-area-inset-top").trim() && !envTop) document.documentElement.style.setProperty("--top", "36px");
   }, 700);
 }
+pullInbox();
 if (NATIVE && VER) checkUpdate().then(m => { if (LATEST > VER) $("updMsg").textContent = m; });
 </script>
 </body>

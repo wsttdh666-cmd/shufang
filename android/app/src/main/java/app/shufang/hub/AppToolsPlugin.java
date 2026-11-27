@@ -336,15 +336,18 @@ public class AppToolsPlugin extends Plugin {
                 try { wv.stopLoading(); wv.destroy(); } catch (Exception ignore) {}
             };
 
-            // 超时
+            // 超时：不再直接失败，而是把当前整页 HTML 带回去（base64），
+            // 让上层能诊断为什么没抓到正文、并从页面里取到字体。标记 timedout。
             h.postDelayed(() -> {
                 if (!done[0]) {
                     done[0] = true;
                     wv.evaluateJavascript(
-                        "(function(){var nt=document.querySelector('.noveltext');return JSON.stringify({t:document.title||'',u:location.href,n:!!nt,l:nt?(nt.textContent||'').length:0,p:(nt?(nt.textContent||''):'').substring(0,200),b:document.body?(document.body.textContent||'').length:0})})()",
-                        dbg -> {
+                        "(function(){try{return btoa(unescape(encodeURIComponent(document.documentElement.outerHTML)))}catch(e){return ''}})()",
+                        b64 -> {
                             cleanup.run();
-                            call.reject("等了很久，页面里没有出现正文。调试：" + (dbg != null ? dbg : "null"));
+                            String data = b64 == null ? "" : b64;
+                            if (data.startsWith("\"") && data.endsWith("\"")) data = data.substring(1, data.length() - 1);
+                            call.resolve(new JSObject().put("status", 200).put("timedout", true).put("data", data).put("url", ""));
                         });
                 }
             }, timeout);

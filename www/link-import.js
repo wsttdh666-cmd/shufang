@@ -32,30 +32,39 @@
     if (r.unbought) return {html:"", doc:null, unbought:true};
     if (!r.data) throw new Error("VIP 页面没有返回内容");
     const html = decode(Uint8Array.from(atob(r.data), c => c.charCodeAt(0)));
-    return {html, doc: new DOMParser().parseFromString(html, "text/html")};
+    return {html, doc: new DOMParser().parseFromString(html, "text/html"), timedout: !!r.timedout};
   }
   // 晋江字体还原：从渲染后的 HTML 拿到字体，把正文/作者话里的私用区码位换回真字。
   // 失败就原样返回（不改坏）。整本书会命中字体缓存。
-  let jjSampleSaved = false;   // 本次 App 运行里，字体样本只存一次
   async function jjRestore(html, text, note){
     try {
       if (!window.JJFont) return {text, note};
       const dec = await JJFont.forHtml(html);
       if (!dec) return {text, note};
-      // 顺手把这章的「加密字体 + 加密正文」各存一份到手机，供发给开发者建精确对照表。
-      // 只在 App 里、每次运行存一次，不打扰正常下载。
-      if (NATIVE && !jjSampleSaved && dec.fontBuf){
-        jjSampleSaved = true;
-        try {
-          const u = new Uint8Array(dec.fontBuf); let s = "";
-          for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192));
-          const ext = (dec.url.match(/\.(woff2|woff|ttf|otf)/i) || [,"woff"])[1];
-          await Capacitor.nativePromise("AppTools", "save", {name: "晋江字体样本." + ext, mime: "font/" + ext, base64: btoa(s)});
-          await Capacitor.nativePromise("AppTools", "save", {name: "晋江加密正文样本.txt", mime: "text/plain", text});
-        } catch(e){}
-      }
       return {text: dec.decode(text), note: note ? dec.decode(note) : note};
     } catch(e){ return {text, note}; }
+  }
+
+  // 导出一次样本：整页 HTML（诊断为什么没抓到正文用）+ 字体文件（建精确对照表用）。
+  // 每次 App 运行存一次，存到 下载/书房，供发给开发者。
+  let jjSampleSaved = false;
+  async function jjDumpSample(html){
+    if (!NATIVE || jjSampleSaved || !html) return;
+    jjSampleSaved = true;
+    try { await Capacitor.nativePromise("AppTools", "save", {name:"晋江VIP页面.html", mime:"text/html", text:html}); } catch(e){}
+    try {
+      const m = html.match(/url\(\s*['"]?([^'")]*jjwxcfont[^'")]*\.(?:woff2|woff|ttf|otf))/i);
+      if (m){
+        let u = m[1]; if (u.startsWith("//")) u = "https:" + u; else if (u.startsWith("/")) u = "https://www.jjwxc.net" + u;
+        const r = await get(u);
+        if (r.status === 200){
+          let s = ""; const b = r.bytes;
+          for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode.apply(null, b.subarray(i, i + 8192));
+          const ext = (u.match(/\.(woff2|woff|ttf|otf)/i) || [,"woff"])[1];
+          await Capacitor.nativePromise("AppTools", "save", {name:"晋江字体样本." + ext, mime:"font/" + ext, base64:btoa(s)});
+        }
+      }
+    } catch(e){}
   }
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -210,6 +219,9 @@
           const vr = await vipPage(ch.url);
           if (vr.unbought) return {text:"", note:"", unbought:true};
           const {doc, html} = vr;
+          await jjDumpSample(html);           // 一进来就存样本，哪怕下面抓不到正文
+          if (vr.timedout && !doc.querySelector(".noveltext") && !doc.querySelector("#paragraph_comment_content"))
+            throw new Error("VIP 正文没渲染出来（已把页面样本存到 下载/书房，可发给开发者诊断）");
           let body = doc.querySelector("#paragraph_comment_content");
           if (!body) {
             const box = doc.querySelector(".noveltext");

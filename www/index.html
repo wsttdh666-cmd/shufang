@@ -109,7 +109,7 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
     </div>
     <div class="row"><button class="small" id="bkAll">全部</button><span class="hint" id="bkRange"></span></div>
     <div class="chlist" id="bkList"></div>
-    <div class="row fill"><button class="primary" id="bkStart">开始下载</button></div>
+    <div class="row fill"><button class="primary" id="bkStart">开始下载</button><button id="bkAddShelf">加入书架</button></div>
   </section>
 
   <section id="bkRun" hidden>
@@ -490,8 +490,8 @@ function db(){ return _db || (_db = new Promise((res,rej)=>{ const r=indexedDB.o
 const reqP = r => new Promise((res,rej)=>{ r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); });
 async function txRW(fn){ const d=await db(); return new Promise((res,rej)=>{ const t=d.transaction(["meta","text"],"readwrite"); t.oncomplete=()=>res(); t.onerror=t.onabort=()=>rej(t.error||new Error("存不进去，可能是手机空间不够")); fn(t); }); }
 async function bookList(){ const d=await db(); return (await reqP(d.transaction("meta").objectStore("meta").getAll())).sort((a,b)=>b.mtime-a.mtime); }
-async function bookAdd(name, text, id=Date.now().toString(36)+Math.random().toString(36).slice(2,6)){
-  await txRW(t=>{ t.objectStore("meta").put({id, name, chars:text.length, mtime:Date.now()}); t.objectStore("text").put(text, id); }); return id; }
+async function bookAdd(name, text, id=Date.now().toString(36)+Math.random().toString(36).slice(2,6), extra={}){
+  await txRW(t=>{ t.objectStore("meta").put(Object.assign({id, name, chars:text.length, mtime:Date.now()}, extra)); t.objectStore("text").put(text, id); }); return id; }
 async function bookText(id){ const d=await db(); return reqP(d.transaction("text").objectStore("text").get(id)); }
 async function bookDel(id){ await txRW(t=>{ t.objectStore("meta").delete(id); t.objectStore("text").delete(id); }); }
 const fmtChars = n => n >= 10000 ? (n/10000).toFixed(1)+" 万字" : n+" 字";
@@ -502,8 +502,15 @@ async function loadBooks(){
   $("shelfCount").textContent = BOOKS.length+" 本"; const box=$("shelfList"); box.textContent="";
   if (!BOOKS.length) box.append(el("p","hint","书架还是空的。在上面导入 txt，或者先去搜书。"));
   for (const b of BOOKS){
-    const d=el("div","item"); d.append(el("div","t",b.name), el("div","s",fmtChars(b.chars)+" · "+new Date(b.mtime).toLocaleDateString()));
+    const d=el("div","item"), t=el("div","t");
+    if (b.platform) t.append(el("span","tag",b.platform));
+    if (b.kind==="catalog") t.append(el("span","tag","只有目录"));
+    t.append(document.createTextNode(b.name)); d.append(t);
+    const sub = b.kind==="catalog" ? [b.author && "作者："+b.author, b.chapters && b.chapters+" 章", "加入于 "+new Date(b.mtime).toLocaleDateString()] : [fmtChars(b.chars), new Date(b.mtime).toLocaleDateString()];
+    d.append(el("div","s",sub.filter(Boolean).join(" · ")));
     const row=el("div","row"), mk=el("button","small primary","做角色卡"), sv=el("button","small","存到手机"), sh=el("button","small","发送"), del=el("button","small","删除");
+    if (b.url){ const go=el("button","small"+(b.kind==="catalog"?" primary":""),"打开导书"); go.onclick=()=>{ show("export"); $("bkInput").value=b.url; $("bkRecognize").click(); }; row.append(go); }
+    if (b.kind==="catalog") mk.hidden = true;
     mk.onclick = () => { show("card"); $("cardBook").value=b.id; $("cardName").value=b.name; cardInfo(); };
     const out = act => async () => { try{ const m = await fileOut(act, safe(b.name)+".txt", await bookText(b.id)); if (m) $("shelfMsg").textContent = m; }catch(e){ $("shelfMsg").textContent = "没成功："+(e.message||e); } };
     sv.onclick = out("save"); sh.onclick = out("share");

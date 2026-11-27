@@ -197,6 +197,7 @@
     $("bkStart").disabled = !ok;
     renderList($("bkList"), b.chapters.map(c => [c.state === "可导" ? "·" : "—", c.num, c.name, c.state === "可导" ? "" : c.why]));
     countRange();
+    $("bkAddShelf").textContent = "加入书架";
     $("bkInfo").hidden = false;
   }
   function picked(){
@@ -220,6 +221,23 @@
     box.append(frag);
     if (target) box.scrollTop = Math.max(0, target.offsetTop - box.offsetTop - 60);
   }
+
+  // 加入书架：把书的信息和目录存进书架（不含正文）。同一本书再点一次是更新，不会重复
+  $("bkAddShelf").onclick = async () => {
+    if (!book) return;
+    const b = book;
+    const lines = [b.title, "作者：" + (b.author || "未知") + "　来源：" + b.platform + "　" + b.url,
+      [b.status, b.words, "目录 " + b.chapters.length + " 章"].filter(Boolean).join(" · ")];
+    if (b.intro) lines.push("简介：\n" + b.intro);
+    lines.push("目录：\n" + b.chapters.map(c => c.num + " " + c.name + (c.state === "可导" ? "" : "（" + c.why + "）")).join("\n"));
+    try {
+      await bookAdd(b.title, lines.join("\n\n") + "\n", "shelf-" + b.key + "-" + b.id,
+        {kind:"catalog", platform:b.platform, url:b.url, author:b.author, chapters:b.chapters.length});
+      setStatus("bkMsg", "已加入书架：《" + b.title + "》。以后在书架点“打开导书”就能回到这里。", "ok");
+      $("bkAddShelf").textContent = "已在书架";
+      try { await loadBooks(); } catch(e){}
+    } catch(e){ setStatus("bkMsg", "没加进去：" + ((e && e.message) || e), "warn"); }
+  };
 
   $("bkStart").onclick = () => {
     const list = picked();
@@ -300,7 +318,7 @@
     const r = run, ok = r.list.filter(c => c.st === "ok").length;
     if (!ok){ setStatus("bkRunMsg", "一章都没下成，没有存进书架。", "warn"); return; }
     const name = r.book.title + (ok < r.book.chapters.length ? "（" + ok + " 章）" : "");
-    r.savedId = await bookAdd(name, composeText(r));
+    r.savedId = await bookAdd(name, composeText(r), undefined, {platform:r.book.platform, url:r.book.url, author:r.book.author});
     r.savedName = name;
     setStatus("bkRunMsg", "下载完成，已存进书架：" + name, "ok");
     $("bkDone").hidden = false;

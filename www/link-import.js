@@ -379,8 +379,8 @@
     $("bkStart").disabled = !p.length;
   }
   function setAll(fn){ if (!book) return; book.chapters.forEach(c => { if (c.state === "可导") fn(c); }); drawPicks(); }
-  $("bkPickAll").onclick = () => setAll(c => { c.pick = true; });
-  $("bkPickNone").onclick = () => setAll(c => { c.pick = false; c.cmt = false; });
+  $("bkPickAll").onclick = $("bkPickAll2").onclick = () => setAll(c => { c.pick = true; });
+  $("bkPickNone").onclick = $("bkPickNone2").onclick = () => setAll(c => { c.pick = false; c.cmt = false; });
   $("bkPickRange").onclick = () => {
     const f = +$("bkFrom").value || 1, t = +$("bkTo").value || 1e9, lo = Math.min(f, t), hi = Math.max(f, t);
     setAll(c => { c.pick = c.num >= lo && c.num <= hi; if (!c.pick) c.cmt = false; });

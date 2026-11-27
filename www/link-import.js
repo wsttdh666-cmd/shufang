@@ -2,7 +2,8 @@
    只收网页上直接给出的文字；VIP、加密字体之类的章节如实标出来，不导。 */
 (() => {
   "use strict";
-  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+  // 用 app 自己真实的浏览器标识（安卓 WebView），登录和下载统一用它，跟手机上正常浏览器一致。
+  const UA = navigator.userAgent;
 
   /* ---------------- 联网 ---------------- */
   async function get(url, {redirect = true} = {}){
@@ -82,6 +83,7 @@
       },
       async chapter(ch){
         const {doc, html} = await page(ch.url);
+        if (/浏览器标识异常/.test(html)) throw new Error("晋江拦了这次请求（浏览器标识异常）。重新登录晋江、且下载时别同时开官方晋江 App");
         let body = doc.querySelector("#paragraph_comment_content");
         if (!body && ch.vip){
           if (/login\.php|请先登录|您还没有登录/.test(html) && !doc.querySelector(".noveltext")) throw new Error("登录过期了，重新登录晋江");
@@ -229,6 +231,18 @@
 
   /* ---------------- 平台选择和登录 ---------------- */
   const LOGIN = {jjwxc:false, qidian:false};
+  let jjNickCache = null; // 晋江登录昵称，登录/退出时清掉重取
+  async function jjNick(){
+    if (jjNickCache !== null) return jjNickCache;
+    try {
+      const r = await Capacitor.nativePromise("AppTools", "get", {url:"https://www.jjwxc.net/"});
+      const b = Uint8Array.from(atob(r.data || ""), c => c.charCodeAt(0));
+      const html = new TextDecoder("gb18030").decode(b);
+      const m = html.match(/欢迎您[，,]\s*([^<（(]{1,30}?)\s*[（(]\s*客户号/);
+      jjNickCache = m ? m[1].trim() : "";
+    } catch(e){ jjNickCache = ""; }
+    return jjNickCache;
+  }
   const SITES = {
     fanqie: {login:false, hint:"番茄不用登录，直接粘贴作品链接或分享文字。正文是加密字体，下载的是网页原样。"},
     jjwxc: {login:true, check:"https://www.jjwxc.net/", logout:".jjwxc.net", mark:/^(readerid|token|bbstoken)$/i,
@@ -253,7 +267,9 @@
     if (!site.login){ $("bkLogin").textContent = "不需要登录"; $("bkLoginBtn").hidden = $("bkLogoutBtn").hidden = true; return; }
     if (!NATIVE){ $("bkLogin").textContent = "登录只能在 App 里用"; $("bkLoginBtn").hidden = $("bkLogoutBtn").hidden = true; return; }
     const ok = await checkLogin(plat);
-    $("bkLogin").textContent = ok ? "已登录" + name : "还没登录" + name;
+    let label = ok ? "已登录" + name : "还没登录" + name;
+    if (ok && plat === "jjwxc"){ const nk = await jjNick(); if (nk) label = "已登录晋江：" + nk; }
+    $("bkLogin").textContent = label;
     $("bkLoginBtn").textContent = ok ? "重新登录" : "登录" + name;
     $("bkLoginBtn").hidden = false; $("bkLogoutBtn").hidden = !ok;
   }
@@ -263,6 +279,7 @@
   };
   $("bkLoginBtn").onclick = () => {
     const site = SITES[plat];
+    jjNickCache = null;
     Capacitor.nativePromise("AppTools", "login", {url:site.page, ua:UA,
       hint:"在下面正常登录" + (plat === "qidian" ? "（会有人机验证，照常过就行）" : "") + "。登录成功后点右上角“登录好了”。登录状态会一直留在 App 里。"}).catch(() => {});
   };
@@ -271,6 +288,7 @@
     if ($("bkLogoutBtn").dataset.sure !== "1"){ $("bkLogoutBtn").dataset.sure = "1"; $("bkLogoutBtn").textContent = "再点一次确认"; return; }
     $("bkLogoutBtn").dataset.sure = ""; $("bkLogoutBtn").textContent = "退出登录";
     try { await Capacitor.nativePromise("AppTools", "logout", {url:site.check, domain:site.logout}); } catch(e){}
+    jjNickCache = null;
     drawPlat();
   };
   // 从登录页回来时刷新登录状态

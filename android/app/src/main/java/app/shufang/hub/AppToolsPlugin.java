@@ -189,7 +189,11 @@ public class AppToolsPlugin extends Plugin {
     public void get(PluginCall call) {
         final String start = call.getString("url", "");
         final boolean follow = call.getBoolean("redirect", true);
-        final String ua = call.getString("ua", "");
+        String ua0 = call.getString("ua", "");
+        if (ua0 == null || ua0.isEmpty()) {
+            try { ua0 = android.webkit.WebSettings.getDefaultUserAgent(getContext()); } catch (Throwable ignore) {}
+        }
+        final String ua = ua0 == null ? "" : ua0;
         new Thread(() -> {
             CookieManager cm = CookieManager.getInstance();
             String url = start;

@@ -402,7 +402,7 @@ function bookEntry(e){
 }
 function buildCard(card, entries, book){
   const data = {name:card.char_name, description:card.description, personality:card.personality, scenario:card.scenario,
-    first_mes:card.first_mes, mes_example:"", creator_notes:"由“小说转酒馆卡”根据《"+book+"》自动整理，仅供个人使用。",
+    first_mes:card.first_mes, mes_example:"", creator_notes:"由“小说转酒馆卡”根据《"+book+"》自动整理。",
     system_prompt:"", post_history_instructions:"", alternate_greetings:[], tags:card.tags, creator:"", character_version:"1.0",
     extensions:{world:book, depth_prompt:{prompt:"",depth:4,role:"system"}},
     character_book:{name:book, description:"", scan_depth:4, token_budget:2048, recursive_scanning:false, extensions:{}, entries:entries.map(bookEntry)}};

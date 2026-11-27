@@ -18,6 +18,5 @@
 
 ## 说明
 
-- 仅供个人使用。导出的书和做出来的卡不要对外传播。
 - 安装包只从本仓库的 Releases 下载。本仓库的签名钥匙是公开的，别人转发的安装包可能被改过。
 - 外壳和更新方式沿用自 [yjqiandao](https://github.com/wsttdh666-cmd/yjqiandao)。

@@ -123,7 +123,8 @@ public class ScriptStore {
                 }
                 write(f, data);
             }
-            parts.add("if(window.__sfRun){\n" + new String(read(f), StandardCharsets.UTF_8) + "\n" + tail + "\n}");
+            parts.add("if(window.__sfRun){try{\n" + new String(read(f), StandardCharsets.UTF_8) + "\n" + tail
+                + "\n}catch(e){if(!window.__sfErr)window.__sfErr='组件出错 " + (i + 1) + "：'+e}}");
         }
         parts.add("if(window.__sfRun){(function(GM_info,GM_xmlhttpRequest,GM_setValue,GM_getValue,GM_deleteValue,GM,unsafeWindow){\n"
             + script

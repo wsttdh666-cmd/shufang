@@ -63,7 +63,7 @@ public class ScriptActivity extends Activity {
     private final ScriptStore store = new ScriptStore();
     private volatile boolean ready = false;
     private boolean registered = false, legacy = false, desktop = true, preparing = false;
-    private String shim = "", mobileUa = "", desktopUa = "";
+    private String shim = "", payload = "", mobileUa = "", desktopUa = "";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService pool = Executors.newFixedThreadPool(6);
     private final Map<Integer, byte[]> bodies = new ConcurrentHashMap<>();
@@ -180,11 +180,7 @@ public class ScriptActivity extends Activity {
                 bodies.clear();
                 exporting = false;
                 // 老版本的系统浏览器内核不支持"页面一开始就运行"，只能在这里尽早塞进去
-                if (legacy && ready && store.matches(url)) {
-                    view.evaluateJavascript(store.rulesJs(), null);
-                    view.evaluateJavascript(shim, null);
-                    for (String part : store.parts) view.evaluateJavascript(part, null);
-                }
+                if (legacy && ready && store.matches(url)) view.evaluateJavascript(payload, null);
             }
 
             @Override
@@ -266,15 +262,20 @@ public class ScriptActivity extends Activity {
         new Thread(() -> {
             try {
                 store.prepare(this, text -> main.post(() -> status.setText(text)));
+                // 规则、垫片、各个组件、脚本本身，按这个顺序拼成一整段。
+                // 分开交给浏览器的话它不保证先后，脚本会抢在组件前面跑，一启动就找不到组件。
+                StringBuilder sb = new StringBuilder(store.rulesJs()).append('\n').append(shim);
+                for (String part : store.parts) sb.append('\n').append(part);
+                final String built = sb.toString();
+                store.parts.clear();
                 main.post(() -> {
+                    payload = built;
                     preparing = false;
                     if (isFinishing() || isDestroyed()) return;
                     if (!registered) {
                         registered = true;
                         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                            WebViewCompat.addDocumentStartJavaScript(web, store.rulesJs(), Collections.singleton("*"));
-                            WebViewCompat.addDocumentStartJavaScript(web, shim, Collections.singleton("*"));
-                            for (String part : store.parts) WebViewCompat.addDocumentStartJavaScript(web, part, Collections.singleton("*"));
+                            WebViewCompat.addDocumentStartJavaScript(web, payload, Collections.singleton("*"));
                         } else {
                             legacy = true;
                         }

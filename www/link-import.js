@@ -84,6 +84,7 @@
       async chapter(ch){
         const {doc, html} = await page(ch.url);
         if (/浏览器标识异常/.test(html)) throw new Error("晋江拦了这次请求（浏览器标识异常）。重新登录晋江、且下载时别同时开官方晋江 App");
+        if (/vip内容加载失败|vip内容加载中/.test(html)) throw new Error("这章 VIP 正文晋江只在网页里用脚本动态加载，静态抓不到（返回的是“加载失败”占位），没法导出");
         let body = doc.querySelector("#paragraph_comment_content");
         if (!body && ch.vip){
           if (/login\.php|请先登录|您还没有登录/.test(html) && !doc.querySelector(".noveltext")) throw new Error("登录过期了，重新登录晋江");

@@ -240,20 +240,61 @@
           let engineErr = "";
           try { await engineEnsure(); }
           catch(e){ engineErr = (e && e.message) || String(e); }
-          const b = await this.loadWeb(id);   // 书名 + 目录（含每章标题）
+          const b = await this.loadWeb(id);   // 书名、作者、简介（页面里有时不带目录）
+          // 目录：页面没带就问番茄的目录接口；再不行用引擎报的总章数补"第N章"
+          if (!b.chapters.length){
+            try { b.chapters = await this.catalog(id); } catch(e){}
+          }
+          if (!b.chapters.length && !engineErr){
+            try {
+              const r = await engineJson("/api/preview/" + encodeURIComponent(id));
+              const n = parseInt(r.data && r.data.chapter_count, 10) || 0;
+              for (let i = 1; i <= n; i++) b.chapters.push({num:i, name:"第" + i + "章", state:"可导", why:"", url:""});
+              if (n) b.noTitles = true;
+            } catch(e){}
+          }
+          if (!b.chapters.length) throw new Error("没读到这本书的目录，过一会儿再试。");
           if (!engineErr){
+            // 引擎按顺序号下载，统一用 1..N 编号
+            b.chapters.forEach((c, i) => { c.num = i + 1; });
             b.engine = true;
             b.encrypted = false;
             // 引擎走官方接口，网页标记的付费章节也一并尝试下
             for (const c of b.chapters){ c.state = "可导"; c.why = ""; }
             b.chapter_count = b.chapters.length;
-            b.notice = "用内置番茄引擎下载，正文是干净文字。下面是每一章的标题，勾选要下的章——番茄按选中范围的首尾章整段下载。";
+            b.notice = b.noTitles
+              ? "用内置番茄引擎下载，正文是干净文字。这次没取到每章的标题，只能按章节序号选；番茄按选中范围的首尾章整段下载。"
+              : "用内置番茄引擎下载，正文是干净文字。下面是每一章的标题，勾选要下的章——番茄按选中范围的首尾章整段下载。";
           } else {
             b.notice = "番茄引擎没能用（" + engineErr + "），退回网页原样：正文是加密字体，约一半字会显示成空白或方框。";
           }
           return b;
         }
         return this.loadWeb(id);
+      },
+      // 番茄网页的目录接口：返回每章的标题和 itemId
+      async catalog(id){
+        const r = await get("https://fanqienovel.com/api/reader/directory/detail?bookId=" + encodeURIComponent(id));
+        if (r.status !== 200) throw new Error("目录接口 HTTP " + r.status);
+        const j = JSON.parse(new TextDecoder("utf-8").decode(r.bytes));
+        const d = (j && j.data) || {};
+        let rows = [];
+        const vols = d.chapterListWithVolume || d.chapter_list_with_volume;
+        if (Array.isArray(vols)) rows = vols.flat();
+        else if (Array.isArray(d.chapterList)) rows = d.chapterList;
+        else if (Array.isArray(d.item_data_list)) rows = d.item_data_list;
+        const out = [];
+        rows.forEach((c, i) => {
+          if (!c) return;
+          const itemId = c.itemId || c.item_id || "";
+          out.push({num: i + 1, name: String(c.title || c.chapter_title || ("第" + (i + 1) + "章")).trim(),
+            state: "可导", why: "", url: itemId ? "https://fanqienovel.com/reader/" + itemId : ""});
+        });
+        // 只有 id 列表、没有标题时，至少把章数补出来
+        if (!out.length && Array.isArray(d.allItemIds)){
+          d.allItemIds.forEach((itemId, i) => out.push({num: i + 1, name: "第" + (i + 1) + "章", state: "可导", why: "", url: "https://fanqienovel.com/reader/" + itemId}));
+        }
+        return out;
       },
       // 网页兜底：和以前一样，解析 __INITIAL_STATE__，正文是加密字体
       async loadWeb(id){

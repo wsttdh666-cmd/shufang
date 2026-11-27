@@ -27,7 +27,12 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
+import android.webkit.CookieManager;
 
 // 网页那边够不着的几件事：装新版本、把文件存到手机里、把文件发给别的 App、用浏览器打开链接
 @CapacitorPlugin(name = "AppTools")
@@ -132,36 +137,116 @@ public class AppToolsPlugin extends Plugin {
         return where;
     }
 
-    // 打开站内浏览器去平台上导书
+    // 打开登录用的浏览器
     @PluginMethod
-    public void browse(PluginCall call) {
-        getActivity().startActivity(new Intent(getContext(), ScriptActivity.class).putExtra("url", call.getString("url", "")));
+    public void login(PluginCall call) {
+        getActivity().startActivity(new Intent(getContext(), LoginActivity.class)
+            .putExtra("url", call.getString("url", ""))
+            .putExtra("ua", call.getString("ua", ""))
+            .putExtra("hint", call.getString("hint", "")));
         call.resolve();
     }
 
-    // 把站内浏览器里导出的 txt 交给页面（页面再放进书架）
+    // 某个网站现在存着哪些 Cookie（只给名字，不给内容），页面靠它判断登没登录
     @PluginMethod
-    public void inbox(PluginCall call) {
-        JSArray list = new JSArray();
-        File[] files = new File(getContext().getFilesDir(), "inbox").listFiles();
-        if (files != null) {
-            for (File f : files) {
-                try (InputStream in = new FileInputStream(f)) {
-                    list.put(new JSObject().put("name", f.getName()).put("text", new String(ScriptStore.readAll(in), StandardCharsets.UTF_8)));
-                } catch (Exception e) {
-                    // 这一本读不出来就留着，下次再试
-                }
+    public void cookieNames(PluginCall call) {
+        String all = CookieManager.getInstance().getCookie(call.getString("url", ""));
+        JSArray names = new JSArray();
+        if (all != null) {
+            for (String part : all.split(";")) {
+                int eq = part.indexOf('=');
+                String name = (eq > 0 ? part.substring(0, eq) : part).trim();
+                if (!name.isEmpty()) names.put(name);
             }
         }
-        call.resolve(new JSObject().put("list", list));
+        call.resolve(new JSObject().put("names", names));
     }
 
-    // 页面确认已经放进书架后，再把收件箱里的那一份清掉
+    // 退出登录：把这个网站存着的 Cookie 全部作废
     @PluginMethod
-    public void inboxDone(PluginCall call) {
-        String name = call.getString("name", "");
-        if (!name.isEmpty() && !name.contains("/")) new File(new File(getContext().getFilesDir(), "inbox"), name).delete();
+    public void logout(PluginCall call) {
+        String url = call.getString("url", "");
+        String domain = call.getString("domain", "");
+        CookieManager cm = CookieManager.getInstance();
+        String all = cm.getCookie(url);
+        if (all != null) {
+            for (String part : all.split(";")) {
+                int eq = part.indexOf('=');
+                String name = (eq > 0 ? part.substring(0, eq) : part).trim();
+                if (name.isEmpty()) continue;
+                String dead = name + "=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/";
+                cm.setCookie(url, dead);
+                if (!domain.isEmpty()) cm.setCookie(url, dead + "; Domain=" + domain);
+            }
+        }
+        cm.flush();
         call.resolve();
+    }
+
+    // 取一个网页：带上你在登录浏览器里留下的登录状态，网站发回的新 Cookie 也存回去。
+    // 跳转自己一步步跟（每一步都带上对应网站的 Cookie），最多跟 5 次。
+    @PluginMethod
+    public void get(PluginCall call) {
+        final String start = call.getString("url", "");
+        final boolean follow = call.getBoolean("redirect", true);
+        final String ua = call.getString("ua", "");
+        new Thread(() -> {
+            CookieManager cm = CookieManager.getInstance();
+            String url = start;
+            try {
+                for (int hop = 0; hop < 6; hop++) {
+                    HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                    try {
+                        c.setInstanceFollowRedirects(false);
+                        c.setConnectTimeout(15000);
+                        c.setReadTimeout(30000);
+                        if (!ua.isEmpty()) c.setRequestProperty("User-Agent", ua);
+                        c.setRequestProperty("Accept", "text/html,application/xhtml+xml,*/*;q=0.8");
+                        c.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9");
+                        String cookie = cm.getCookie(url);
+                        if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
+                        int code = c.getResponseCode();
+                        Map<String, List<String>> fields = c.getHeaderFields();
+                        for (Map.Entry<String, List<String>> h : fields.entrySet()) {
+                            if (h.getKey() != null && h.getKey().equalsIgnoreCase("Set-Cookie")) {
+                                for (String v : h.getValue()) cm.setCookie(url, v);
+                            }
+                        }
+                        String location = c.getHeaderField("Location");
+                        if (code >= 300 && code < 400 && location != null) {
+                            String next = new URL(new URL(url), location).toString();
+                            if (follow) {
+                                url = next;
+                                continue;
+                            }
+                            call.resolve(new JSObject().put("status", code).put("url", url).put("location", next).put("data", ""));
+                            return;
+                        }
+                        byte[] body;
+                        try (InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream()) {
+                            body = in == null ? new byte[0] : readAll(in);
+                        }
+                        cm.flush();
+                        call.resolve(new JSObject().put("status", code).put("url", url).put("location", "")
+                            .put("data", Base64.encodeToString(body, Base64.NO_WRAP)));
+                        return;
+                    } finally {
+                        c.disconnect();
+                    }
+                }
+                call.reject("跳转太多次了");
+            } catch (Exception e) {
+                call.reject(String.valueOf(e.getMessage()));
+            }
+        }).start();
+    }
+
+    private static byte[] readAll(InputStream in) throws Exception {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        return out.toByteArray();
     }
 
     // 发给别的 App（网盘、文件管理、酒馆等）

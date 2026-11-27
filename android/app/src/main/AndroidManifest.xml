@@ -35,7 +35,7 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
         <activity
-            android:name=".ScriptActivity"
+            android:name=".LoginActivity"
             android:exported="false"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode"
             android:theme="@style/AppTheme.NoActionBar" />

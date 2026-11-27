@@ -68,6 +68,11 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
 .chlist .ch.bad{color:var(--warn)}
 .intro{white-space:pre-wrap;font-size:14px;margin:6px 0 0}
 #bkPlatform{margin-right:8px}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{flex:1;border:0;border-radius:0;min-height:42px;background:var(--surface);color:var(--mute)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-checked=true]{background:var(--accent);color:var(--accent-ink);font-weight:700}
+#bkLoginRow{min-height:36px}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -91,10 +96,16 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
 <!-- ============ 导书 ============ -->
 <div class="view" id="v-export" hidden>
   <section>
+    <div class="seg" role="radiogroup" aria-label="平台">
+      <button role="radio" data-plat="fanqie" aria-checked="true">番茄</button>
+      <button role="radio" data-plat="jjwxc" aria-checked="false">晋江</button>
+      <button role="radio" data-plat="qidian" aria-checked="false">起点</button>
+    </div>
+    <div class="row" id="bkLoginRow"><span class="hint" id="bkLogin"></span><button class="small" id="bkLoginBtn" hidden>登录</button><button class="small" id="bkLogoutBtn" hidden>退出登录</button></div>
     <label for="bkInput">作品链接，或 App 里“分享”复制的文字<input type="text" id="bkInput" placeholder="https://…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go"></label>
     <div class="row fill"><button class="primary" id="bkRecognize">识别</button></div>
     <p class="note" id="bkMsg" role="status" hidden></p>
-    <p class="hint">目前能识别晋江和番茄的链接。晋江可以导免费章节；番茄网页版正文是加密的，只能看信息和目录。</p>
+    <p class="hint" id="bkPlatHint"></p>
   </section>
 
   <section id="bkInfo" hidden>

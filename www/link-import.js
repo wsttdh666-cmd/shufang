@@ -8,15 +8,10 @@
   async function get(url, {redirect = true} = {}){
     let r;
     if (NATIVE){
-      try {
-        r = await Capacitor.nativePromise("CapacitorHttp", "request", {
-          method:"GET", url, headers:{"User-Agent":UA, "Accept":"text/html,*/*"}, responseType:"arraybuffer",
-          disableRedirects:!redirect, connectTimeout:15000, readTimeout:30000
-        });
-      } catch(e){ throw new Error("连不上网站：" + ((e && e.message) || e)); }
-      const bytes = typeof r.data === "string" ? Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) : new Uint8Array(0);
-      const h = {}; for (const k in (r.headers || {})) h[k.toLowerCase()] = r.headers[k];
-      return {status:r.status, headers:h, bytes, url:r.url || url};
+      try { r = await Capacitor.nativePromise("AppTools", "get", {url, redirect, ua:UA}); }
+      catch(e){ throw new Error("连不上网站：" + ((e && e.message) || e)); }
+      const bytes = r.data ? Uint8Array.from(atob(r.data), c => c.charCodeAt(0)) : new Uint8Array(0);
+      return {status:r.status, headers:{location:r.location || ""}, bytes, url:r.url || url};
     }
     const res = await fetch(url, {redirect: redirect ? "follow" : "manual"});
     return {status:res.status, headers:{location:res.headers.get("location") || ""}, bytes:new Uint8Array(await res.arrayBuffer()), url:res.url};
@@ -65,12 +60,13 @@
           const name = clean((a || tds[1])?.textContent).replace(/\s+/g, " ");
           if (!num || !name) continue;
           const href = a?.getAttribute("href") || "";
-          const vip = /onebook_vip/.test(a?.getAttribute("rel") || "") || /\[VIP\]/i.test(tds[1]?.textContent || "");
+          const vip = /onebook_vip/.test((a?.getAttribute("rel") || "") + href) || /\[VIP\]/i.test(tds[1]?.textContent || "");
           let state = "可导", why = "";
-          if (vip){ state = "不可导"; why = "VIP 章节（正文是加密字体）"; }
-          else if (!/chapterid=\d+/.test(href)){ state = "不可导"; why = "章节被锁或已删除"; }
-          chapters.push({num, name, note: clean(tds[2]?.textContent), state, why,
-            url: state === "可导" ? "https://www.jjwxc.net/onebook.php?novelid=" + id + "&chapterid=" + num : ""});
+          if (vip && !LOGIN.jjwxc){ state = "不可导"; why = "VIP 章节，登录晋江后才能下"; }
+          else if (!vip && !/chapterid=\d+/.test(href)){ state = "不可导"; why = "章节被锁或已删除"; }
+          chapters.push({num, name, note: clean(tds[2]?.textContent), state, why, vip,
+            url: state !== "可导" ? "" : vip ? "https://my.jjwxc.net/onebook_vip.php?novelid=" + id + "&chapterid=" + num
+              : "https://www.jjwxc.net/onebook.php?novelid=" + id + "&chapterid=" + num});
         }
         if (!chapters.length) throw new Error("没读到目录。");
         return {
@@ -78,12 +74,22 @@
           author: q('[itemprop="author"]')?.textContent.trim() || "",
           status: q('[itemprop="updataStatus"]')?.textContent.trim() || "",
           words, intro: textOf(q("#novelintro")), chapters,
-          notice: chapters.some(c => c.why.startsWith("VIP")) ? "晋江的 VIP 章节正文用了加密字体，这里只导免费章节。" : ""
+          encrypted: LOGIN.jjwxc && chapters.some(c => c.vip),
+          notice: !chapters.some(c => c.vip) ? ""
+            : LOGIN.jjwxc ? "VIP 章节会按你账号买过的下载，正文是网页原样（加密字体，约一部分字显示成空白或方框），不做还原。没买的章节会标成失败。"
+            : "这本有 VIP 章节。登录晋江后，买过的 VIP 章节也能下（网页原样，加密字体）。"
         };
       },
       async chapter(ch){
-        const {doc} = await page(ch.url);
-        const body = doc.querySelector("#paragraph_comment_content");
+        const {doc, html} = await page(ch.url);
+        let body = doc.querySelector("#paragraph_comment_content");
+        if (!body && ch.vip){
+          if (/login\.php|请先登录|您还没有登录/.test(html) && !doc.querySelector(".noveltext")) throw new Error("登录过期了，重新登录晋江");
+          const box = doc.querySelector(".noveltext");
+          if (!box || /购买|订阅本章|余额不足/.test(box.textContent) && box.textContent.length < 400) throw new Error("这章没买");
+          body = box.cloneNode(true);
+          body.querySelectorAll("[id^=favorite], #report_box, .float_favorite, #mongolia_layer, h2, script, style, div[align=center], [style*='display:none' i], [style*='display: none' i], .readsmall, #note_danmu_wrapper").forEach(n => n.remove());
+        }
         if (!body) throw new Error("页面上没有正文");
         const text = textOf(body);
         if (!text) throw new Error("正文是空的");
@@ -134,7 +140,7 @@
     }
   };
   const UNSUPPORTED = [
-    [/(^|\.)qidian\.com$/, "起点打开就要人机验证，这里暂时取不到页面。"],
+    [/(^|\.)qidian\.com$/, "起点的识别和下载还在做：先在上面选“起点”登录一次，下一版接上。"],
     [/(^|\.)ciweimao\.com$/, "刺猬猫的正文是加密的，这里导不了。"]
   ];
   function initialState(html){
@@ -172,6 +178,56 @@
     throw new Error("认不出这个网址。目前能识别晋江、番茄的作品链接。");
   }
 
+  /* ---------------- 平台选择和登录 ---------------- */
+  const LOGIN = {jjwxc:false, qidian:false};
+  const SITES = {
+    fanqie: {login:false, hint:"番茄不用登录，直接粘贴作品链接或分享文字。正文是加密字体，下载的是网页原样。"},
+    jjwxc: {login:true, check:"https://www.jjwxc.net/", logout:".jjwxc.net", mark:/^(readerid|token|bbstoken)$/i,
+      page:"https://my.jjwxc.net/login.php", hint:"免费章节不用登录也能下。登录后，买过的 VIP 章节也能下（网页原样，加密字体）。"},
+    qidian: {login:true, check:"https://www.qidian.com/", logout:".qidian.com", mark:/^(ywguid|ywkey)$/i,
+      page:"https://passport.qidian.com/", hint:"起点打开就要人机验证。先登录一次（在登录页里正常过验证），识别和下载下一版接上。"}
+  };
+  let plat = "fanqie";
+  try { plat = localStorage.getItem("sf:plat") || "fanqie"; } catch(e){}
+  async function checkLogin(key){
+    const site = SITES[key];
+    if (!site.login || !NATIVE) return false;
+    try { const r = await Capacitor.nativePromise("AppTools", "cookieNames", {url:site.check}); LOGIN[key] = (r.names || []).some(n => site.mark.test(n)); }
+    catch(e){ LOGIN[key] = false; }
+    return LOGIN[key];
+  }
+  async function drawPlat(){
+    for (const b of document.querySelectorAll("[data-plat]")) b.setAttribute("aria-checked", b.dataset.plat === plat);
+    const site = SITES[plat], name = {fanqie:"番茄", jjwxc:"晋江", qidian:"起点"}[plat];
+    $("bkPlatHint").textContent = site.hint;
+    $("bkInput").placeholder = {fanqie:"番茄作品链接，或 App 里“分享”复制的文字", jjwxc:"晋江作品链接，比如 jjwxc.net/onebook.php?novelid=…", qidian:"起点作品链接"}[plat];
+    if (!site.login){ $("bkLogin").textContent = "不需要登录"; $("bkLoginBtn").hidden = $("bkLogoutBtn").hidden = true; return; }
+    if (!NATIVE){ $("bkLogin").textContent = "登录只能在 App 里用"; $("bkLoginBtn").hidden = $("bkLogoutBtn").hidden = true; return; }
+    const ok = await checkLogin(plat);
+    $("bkLogin").textContent = ok ? "已登录" + name : "还没登录" + name;
+    $("bkLoginBtn").textContent = ok ? "重新登录" : "登录" + name;
+    $("bkLoginBtn").hidden = false; $("bkLogoutBtn").hidden = !ok;
+  }
+  for (const b of document.querySelectorAll("[data-plat]")) b.onclick = () => {
+    plat = b.dataset.plat; try { localStorage.setItem("sf:plat", plat); } catch(e){}
+    drawPlat();
+  };
+  $("bkLoginBtn").onclick = () => {
+    const site = SITES[plat];
+    Capacitor.nativePromise("AppTools", "login", {url:site.page, ua:UA,
+      hint:"在下面正常登录" + (plat === "qidian" ? "（会有人机验证，照常过就行）" : "") + "。登录成功后点右上角“登录好了”。登录状态会一直留在 App 里。"}).catch(() => {});
+  };
+  $("bkLogoutBtn").onclick = async () => {
+    const site = SITES[plat];
+    if ($("bkLogoutBtn").dataset.sure !== "1"){ $("bkLogoutBtn").dataset.sure = "1"; $("bkLogoutBtn").textContent = "再点一次确认"; return; }
+    $("bkLogoutBtn").dataset.sure = ""; $("bkLogoutBtn").textContent = "退出登录";
+    try { await Capacitor.nativePromise("AppTools", "logout", {url:site.check, domain:site.logout}); } catch(e){}
+    drawPlat();
+  };
+  // 从登录页回来时刷新登录状态
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) drawPlat(); });
+  drawPlat();
+
   /* ---------------- 界面 ---------------- */
   let book = null, run = null;
   const ST = {wait:"·", ok:"✓", fail:"✗", skip:"—", busy:"…"};
@@ -185,6 +241,8 @@
     setStatus("bkMsg", "正在识别…");
     try {
       const {key, id} = await recognize(input);
+      if (key !== plat){ plat = key; try { localStorage.setItem("sf:plat", plat); } catch(e){} }
+      await drawPlat();
       setStatus("bkMsg", "认出来了：" + PLATFORMS[key].name + "，正在读取书的信息和目录…");
       book = await PLATFORMS[key].load(id);
       book.key = key; book.platform = PLATFORMS[key].name;

@@ -297,6 +297,13 @@ public class ScriptActivity extends Activity {
         });
     }
 
+    private void switchUa() {
+        desktop = !desktop;
+        web.getSettings().setUserAgentString(desktop ? desktopUa : mobileUa);
+        uaButton.setText(desktop ? "换成手机版" : "换成电脑版");
+        web.reload();
+    }
+
     // 每 1.5 秒读一次脚本里的书和各章状态，显示到面板上
     private void pollProgress() {
         if (isDestroyed()) return;

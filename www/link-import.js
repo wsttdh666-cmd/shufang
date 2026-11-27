@@ -3,7 +3,6 @@
 (() => {
   "use strict";
   const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
-  const PRIVATE_USE = /[-]/;
 
   /* ---------------- 联网 ---------------- */
   async function get(url, {redirect = true} = {}){
@@ -88,7 +87,6 @@
         if (!body) throw new Error("页面上没有正文");
         const text = textOf(body);
         if (!text) throw new Error("正文是空的");
-        if (PRIVATE_USE.test(text)) throw new Error("正文是加密字体");
         let note = "";
         const ns = doc.querySelector("#note_str");
         if (ns){ const box = doc.createElement("div"); box.innerHTML = ns.innerHTML || ns.textContent; note = textOf(box); }
@@ -108,16 +106,30 @@
         const st = initialState(html), p = st && st.page;
         if (!p || !p.bookName) throw new Error("没在页面上找到这本书的信息。");
         const chapters = [];
-        (p.chapterListWithVolume || []).flat().forEach((c, i) => chapters.push({
-          num: parseInt(c.realChapterOrder, 10) || i + 1, name: c.title || ("第" + (i + 1) + "章"), state: "不可导",
-          why: c.isChapterLock || c.needPay ? "付费章节" : "网页正文是加密字体", url: "https://fanqienovel.com/reader/" + c.itemId
-        }));
+        (p.chapterListWithVolume || []).flat().forEach((c, i) => {
+          const locked = !!(c.isChapterLock || c.needPay);
+          chapters.push({num: parseInt(c.realChapterOrder, 10) || i + 1, name: c.title || ("第" + (i + 1) + "章"),
+            state: locked ? "不可导" : "可导", why: locked ? "付费章节" : "", url: "https://fanqienovel.com/reader/" + c.itemId});
+        });
         return {
           id, url, title: p.bookName, author: p.author || "", status: p.creationStatus === 0 ? "已完结" : "连载中",
           words: p.wordNumber ? wanzi(p.wordNumber) : "",
           intro: clean(p.abstract), chapters,
-          notice: "番茄网页版每一章的正文都换成了加密字体，自己做的导书读不出原文，所以这本只能看信息和目录。"
+          encrypted: true,
+          notice: "番茄网页版的正文是加密字体。下载的是网页原样，约一半的字在 txt 里会显示成空白或方框，不做还原。"
         };
+      },
+      async chapter(ch){
+        const {html} = await page(ch.url);
+        const st = initialState(html);
+        const data = st && st.reader && st.reader.chapterData;
+        if (!data || !data.content) throw new Error("页面上没有正文");
+        const box = document.createElement("div");
+        box.innerHTML = data.content;
+        box.querySelectorAll("script, style").forEach(n => n.remove());
+        const text = [...box.querySelectorAll("p")].map(p => p.textContent.trim()).filter(Boolean).join("\n") || textOf(box);
+        if (!text) throw new Error("正文是空的");
+        return {text, note: ""};
       }
     }
   };
@@ -189,7 +201,7 @@
     $("bkPlatform").textContent = b.platform;
     $("bkMeta").textContent = [b.author && "作者：" + b.author, b.status, b.words, "目录 " + b.chapters.length + " 章"].filter(Boolean).join(" · ");
     $("bkIntro").textContent = b.intro || "（没有简介）";
-    $("bkAvail").textContent = "可导出 " + ok + " 章，导不了 " + (b.chapters.length - ok) + " 章。";
+    $("bkAvail").textContent = "可导出 " + ok + " 章" + (b.encrypted ? "（加密原样）" : "") + "，导不了 " + (b.chapters.length - ok) + " 章。";
     setStatus("bkNotice", b.notice || "", b.notice ? "warn" : "");
     const first = b.chapters.find(c => c.state === "可导"), last = [...b.chapters].reverse().find(c => c.state === "可导");
     $("bkFrom").value = first ? first.num : 1; $("bkTo").value = last ? last.num : b.chapters.length;
@@ -305,6 +317,12 @@
   function composeText(r){
     const b = r.book, parts = [b.title, "作者：" + (b.author || "未知") + "　来源：" + b.platform + "　" + b.url];
     if (b.intro) parts.push("简介：\n" + b.intro);
+    if (b.encrypted){
+      const all = r.list.filter(c => c.st === "ok").map(c => c.text).join("");
+      const pua = (all.match(/[\uE000-\uF8FF]/g) || []).length;
+      parts.push("【说明】这本书的正文是从" + b.platform + "网页原样保存的。网页把部分字换成了加密字体的专用编码，在普通字体里显示成空白或方框。" +
+        "本文件共 " + all.length + " 字，其中加密字符 " + pua + " 个（" + (all.length ? Math.round(100 * pua / all.length) : 0) + "%），没有做还原。");
+    }
     for (const c of r.list){
       if (c.st !== "ok") { parts.push(c.name + "\n\n（这一章没有导出：" + (c.err || "未下载") + "）"); continue; }
       parts.push(c.name + "\n\n" + c.text + (c.note ? "\n\n作者有话说：\n" + c.note : ""));

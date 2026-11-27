@@ -30,6 +30,7 @@
     return {html, doc: new DOMParser().parseFromString(html, "text/html")};
   }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const wanzi = n => n >= 10000 ? (n / 10000).toFixed(1) + " 万字" : n + " 字";
   const clean = s => String(s || "").replace(/ /g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   function textOf(node){
     if (!node) return "";
@@ -55,7 +56,8 @@
         const q = s => doc.querySelector(s);
         const title = (q('[itemprop="articleSection"]') || q('h1[itemprop="name"]'))?.textContent.trim();
         if (!title) throw new Error("没在页面上找到书名，这本书可能被锁或者网址不对。");
-        const words = [...doc.querySelectorAll('[itemprop="wordCount"]')].map(n => n.textContent.trim()).find(t => /字/.test(t)) || "";
+        const wn = parseInt(([...doc.querySelectorAll('[itemprop="wordCount"]')].map(n => n.textContent.trim()).find(t => /字/.test(t)) || "").replace(/\D/g, ""), 10);
+        const words = wn ? wanzi(wn) : "";
         const chapters = [];
         for (const row of doc.querySelectorAll('tr[itemprop~="chapter"]')){
           const tds = row.querySelectorAll("td");
@@ -112,7 +114,7 @@
         }));
         return {
           id, url, title: p.bookName, author: p.author || "", status: p.creationStatus === 0 ? "已完结" : "连载中",
-          words: p.wordNumber ? (p.wordNumber >= 10000 ? (p.wordNumber / 10000).toFixed(1) + " 万字" : p.wordNumber + " 字") : "",
+          words: p.wordNumber ? wanzi(p.wordNumber) : "",
           intro: clean(p.abstract), chapters,
           notice: "番茄网页版每一章的正文都换成了加密字体，自己做的导书读不出原文，所以这本只能看信息和目录。"
         };
@@ -222,7 +224,7 @@
   $("bkStart").onclick = () => {
     const list = picked();
     if (!list.length){ setStatus("bkMsg", "这个范围里没有能导的章节。", "warn"); return; }
-    run = {book, list: list.map(c => Object.assign({}, c, {st:"wait", text:"", note:"", err:""})), next:0, active:false, stop:false, savedId:null};
+    run = {book, from: +$("bkFrom").value, to: +$("bkTo").value, list: list.map(c => Object.assign({}, c, {st:"wait", text:"", note:"", err:""})), next:0, active:false, stop:false, savedId:null};
     $("bkInfo").hidden = true; $("bkRun").hidden = false; $("bkDone").hidden = true;
     loop();
   };
@@ -289,7 +291,8 @@
       if (c.st !== "ok") { parts.push(c.name + "\n\n（这一章没有导出：" + (c.err || "未下载") + "）"); continue; }
       parts.push(c.name + "\n\n" + c.text + (c.note ? "\n\n作者有话说：\n" + c.note : ""));
     }
-    const skipped = b.chapters.filter(c => c.state !== "可导");
+    const lo = Math.min(...r.list.map(c => c.num)), hi = Math.max(...r.list.map(c => c.num));
+    const skipped = b.chapters.filter(c => c.state !== "可导" && c.num >= lo && c.num <= hi);
     if (skipped.length) parts.push("——\n以下 " + skipped.length + " 章没有导出：\n" + skipped.map(c => c.num + " " + c.name + "（" + c.why + "）").join("\n"));
     return parts.join("\n\n\n") + "\n";
   }

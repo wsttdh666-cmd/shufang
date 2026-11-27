@@ -119,6 +119,15 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
       <label for="bkTo">到第几章<input type="number" id="bkTo" min="1" inputmode="numeric"></label>
     </div>
     <div class="row"><button class="small" id="bkAll">全部</button><span class="hint" id="bkRange"></span></div>
+    <label for="bkCmt" id="bkCmtBox">段评
+      <select id="bkCmt">
+        <option value="0">不带段评</option>
+        <option value="5">带段评，每段最多 5 条</option>
+        <option value="20">带段评，每段最多 20 条</option>
+        <option value="50">带段评，每段最多 50 条</option>
+      </select>
+    </label>
+    <p class="hint" id="bkCmtHint"></p>
     <div class="chlist" id="bkList"></div>
     <div class="row fill"><button class="primary" id="bkStart">开始下载</button><button id="bkAddShelf">加入书架</button></div>
   </section>

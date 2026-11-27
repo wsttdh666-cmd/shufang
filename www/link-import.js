@@ -96,7 +96,8 @@
         let note = "";
         const ns = doc.querySelector("#note_str");
         if (ns){ const box = doc.createElement("div"); box.innerHTML = ns.innerHTML || ns.textContent; note = textOf(box); }
-        return {text, note};
+        const comments = ch.cmt > 0 ? await jjComments(ch, note) : null;
+        return {text, note, comments};
       }
     },
     fanqie: {
@@ -139,6 +140,54 @@
       }
     }
   };
+  // 晋江段评：先问每段有几条，再按需要取每段的前几条（晋江网页自己就是这么取的）
+  async function getJson(url){
+    const r = await get(url);
+    if (r.status !== 200) throw new Error("段评取不到（HTTP " + r.status + "）");
+    let j; try { j = JSON.parse(new TextDecoder("utf-8").decode(r.bytes)); } catch(e){ throw new Error("段评返回的格式不对"); }
+    if (String(j.code) !== "200") throw new Error("段评取不到：" + (j.message || j.code));
+    return j.data;
+  }
+  async function jjComments(ch, note){
+    const [novel, chapter] = [ch.url.match(/novelid=(\d+)/)[1], ch.num];
+    const base = "https://www.jjwxc.net/app.jjwxc/Pc/comment/";
+    let counts;
+    try { counts = await getJson(base + "getNovelParagraphCommentNum?novelid=" + novel + "&chapterid=" + chapter); }
+    catch(e){ return {error: e.message}; }
+    const out = {};
+    for (const it of (Array.isArray(counts) ? counts : [])){
+      const pid = String(it.paragraph_id), total = parseInt(it.comment_total, 10) || 0;
+      if (!total || (pid === "-2" && !note)) continue;
+      const want = Math.min(total, ch.cmt), list = [];
+      for (let off = 0; off < want; off += 50){
+        try {
+          const d = await getJson(base + "getCommentList?novelId=" + novel + "&chapterId=" + chapter + "&paragraph_id=" + pid + "&offset=" + off + "&limit=" + Math.min(50, want - off));
+          const got = (d && d.commentList) || [];
+          for (const c of got) list.push({who: String(c.commentAuthor || "").trim(), ip: String(c.ip_pos || "").trim(),
+            body: clean(String(c.commentBody || "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")), replies: parseInt(c.replyTotal, 10) || 0});
+          if (got.length < Math.min(50, want - off)) break;
+        } catch(e){ break; }
+        await sleep(250);
+      }
+      if (list.length) out[pid] = {total, list};
+      await sleep(250);
+    }
+    return {map: out};
+  }
+  function withComments(text, cm){
+    if (!cm || !cm.map) return text;
+    let i = 0;
+    return text.split("\n").map(line => {
+      if (!line.trim()) return line;
+      const c = cm.map[String(++i)];
+      return c ? line + "\n" + formatComments(c) : line;
+    }).join("\n");
+  }
+  function formatComments(c){
+    return "　　【段评 共 " + c.total + " 条" + (c.list.length < c.total ? "，这里收了 " + c.list.length + " 条" : "") + "】\n" +
+      c.list.map(x => "　　· " + (x.who || "匿名") + (x.ip ? "（" + x.ip + "）" : "") + "：" + x.body.replace(/\n+/g, " ") + (x.replies ? "（" + x.replies + " 条回复）" : "")).join("\n");
+  }
+
   const UNSUPPORTED = [
     [/(^|\.)qidian\.com$/, "起点的识别和下载还在做：先在上面选“起点”登录一次，下一版接上。"],
     [/(^|\.)ciweimao\.com$/, "刺猬猫的正文是加密的，这里导不了。"]
@@ -265,6 +314,10 @@
     $("bkFrom").value = first ? first.num : 1; $("bkTo").value = last ? last.num : b.chapters.length;
     $("bkFrom").max = $("bkTo").max = b.chapters[b.chapters.length - 1].num;
     $("bkStart").disabled = !ok;
+    $("bkCmt").disabled = b.key !== "jjwxc";
+    if (b.key !== "jjwxc") $("bkCmt").value = "0";
+    $("bkCmtHint").textContent = b.key === "jjwxc" ? "带段评会慢不少：每一段都要单独去取。热门的书一段可能有上千条，只收每段最前面的几条。"
+      : "番茄网页版没有段评（只有番茄 App 里有），所以这里不能带。";
     renderList($("bkList"), b.chapters.map(c => [c.state === "可导" ? "·" : "—", c.num, c.name, c.state === "可导" ? "" : c.why]));
     countRange();
     $("bkAddShelf").textContent = "加入书架";
@@ -312,7 +365,8 @@
   $("bkStart").onclick = () => {
     const list = picked();
     if (!list.length){ setStatus("bkMsg", "这个范围里没有能导的章节。", "warn"); return; }
-    run = {book, from: +$("bkFrom").value, to: +$("bkTo").value, list: list.map(c => Object.assign({}, c, {st:"wait", text:"", note:"", err:""})), next:0, active:false, stop:false, savedId:null};
+    const cmt = book.key === "jjwxc" ? +$("bkCmt").value || 0 : 0;
+    run = {book, cmt, from: +$("bkFrom").value, to: +$("bkTo").value, list: list.map(c => Object.assign({}, c, {cmt, st:"wait", text:"", note:"", comments:null, err:""})), next:0, active:false, stop:false, savedId:null};
     $("bkInfo").hidden = true; $("bkRun").hidden = false; $("bkDone").hidden = true;
     loop();
   };
@@ -345,12 +399,12 @@
         if (r.stop){ setStatus("bkRunMsg", "已暂停。点“继续”接着下。"); break; }
         const ch = r.list[r.next];
         ch.st = "busy"; draw();
-        setStatus("bkRunMsg", "正在下载：" + ch.name);
+        setStatus("bkRunMsg", "正在下载：" + ch.name + (r.cmt ? "（连段评一起，会慢一点）" : ""));
         let tries = 0;
         for (;;){
           try {
             const got = await plat.chapter(ch);
-            ch.text = got.text; ch.note = got.note || ""; ch.st = "ok"; streak = 0;
+            ch.text = got.text; ch.note = got.note || ""; ch.comments = got.comments || null; ch.st = "ok"; streak = 0;
             break;
           } catch(e){
             const msg = (e && e.message) || String(e);
@@ -375,6 +429,7 @@
   function composeText(r){
     const b = r.book, parts = [b.title, "作者：" + (b.author || "未知") + "　来源：" + b.platform + "　" + b.url];
     if (b.intro) parts.push("简介：\n" + b.intro);
+    if (r.cmt) parts.push("【段评】每段最多收 " + r.cmt + " 条，按晋江网页的顺序。段评跟在对应段落下面，以“【段评】”开头。");
     if (b.encrypted){
       const all = r.list.filter(c => c.st === "ok").map(c => c.text).join("");
       const pua = (all.match(/[\uE000-\uF8FF]/g) || []).length;
@@ -383,7 +438,9 @@
     }
     for (const c of r.list){
       if (c.st !== "ok") { parts.push(c.name + "\n\n（这一章没有导出：" + (c.err || "未下载") + "）"); continue; }
-      parts.push(c.name + "\n\n" + c.text + (c.note ? "\n\n作者有话说：\n" + c.note : ""));
+      const cm = c.comments, say = cm && cm.map && cm.map["-2"];
+      parts.push(c.name + "\n\n" + withComments(c.text, cm) + (c.note ? "\n\n作者有话说：\n" + c.note + (say ? "\n" + formatComments(say) : "") : "")
+        + (cm && cm.error ? "\n\n（这一章的段评没取到：" + cm.error + "）" : ""));
     }
     const lo = Math.min(...r.list.map(c => c.num)), hi = Math.max(...r.list.map(c => c.num));
     const skipped = b.chapters.filter(c => c.state !== "可导" && c.num >= lo && c.num <= hi);

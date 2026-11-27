@@ -91,7 +91,7 @@ window.JJFont = (() => {
     document.fonts.add(face);
     const known = {};                         // 已解出的 码位->真字，整本累积
     const decoder = {
-      url, family,
+      url, family, fontBuf: buf,              // 原始字体字节，供"导出样本"校准用
       decode(text){
         if (!text) return text;
         // 收集这段里还没解过的私用区码位

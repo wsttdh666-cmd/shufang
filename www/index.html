@@ -74,11 +74,12 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
   <section>
     <label for="kw">书名或作者<input type="search" id="kw" autocomplete="off" enterkeyhint="search"></label>
     <div class="row fill"><button class="primary" id="doSearch">搜网盘分享</button></div>
-    <p class="hint" id="searchMsg">在百度、夸克等网盘的公开分享里找别人存下来的书。</p>
+    <p class="hint" id="searchMsg">在百度、夸克等网盘的公开分享里找别人存下来的书。只留下标题里带关键词、看起来是小说的结果。</p>
   </section>
   <section id="panBox" hidden><h2>网盘分享<small id="panCount"></small></h2>
     <p class="hint">点开链接，在网盘 App 里转存并下载 txt，再回到“书架”导入。链接是别人分享的，失效很常见。</p>
-    <div class="list" id="panList"></div></section>
+    <div class="list" id="panList"></div>
+    <div class="row fill"><button id="panMore" hidden></button></div></section>
 </div>
 
 <!-- ============ 导书 ============ -->
@@ -523,15 +524,29 @@ async function doSearch(){
       if (!l || !/^(https?:\/\/|magnet:|ed2k:)/.test(String(l.url||""))) continue;
       items.push({type, url:String(l.url), password:String(l.password||""), note:String(l.note||"").trim().slice(0,200), date:String(l.datetime||"").slice(0,10)});
     }
-    const order = {quark:0, baidu:1};
-    items.sort((a,b)=> ((order[a.type]??5)-(order[b.type]??5)) || (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-    renderPan(items.slice(0,200)); $("searchMsg").textContent="搜完了。";
+    // 搜索服务什么资源都收(大多是影视), 而且会返回标题里根本没有关键词的东西, 所以这里自己再筛一遍并按相关度排
+    const toks = kw.toLowerCase().split(/\s+/).filter(Boolean), order = {quark:0, baidu:1};
+    for (const it of items){ const n = it.note.toLowerCase();
+      it.hit = toks.every(t => n.includes(t)); it.video = VIDEO.test(it.note); it.book = BOOKISH.test(it.note);
+      it.score = (it.hit?4:0) + (it.book?2:0) - (it.video?3:0); }
+    items.sort((a,b)=> (b.score-a.score) || ((order[a.type]??5)-(order[b.type]??5)) || (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    PAN.good = items.filter(it => it.hit && (!it.video || it.book)).slice(0,200);
+    PAN.rest = items.filter(it => !(it.hit && (!it.video || it.book))).slice(0,200);
+    PAN.all = false; renderPan();
+    $("searchMsg").textContent = PAN.good.length ? "找到 "+PAN.good.length+" 条像是小说的分享。" : "没找到标题里带“"+kw+"”的小说分享。换个关键词试试：写全书名，或者加上作者名。";
   }catch(e){ $("searchMsg").textContent = e.code==="network" ? "连不上网盘搜索服务。检查网络，或到“密钥”里换一个服务地址。" : (e.message||"搜索失败。"); }
   $("doSearch").disabled=false;
 }
-function renderPan(items){
+const VIDEO = /(1080p|2160p|720p|4k|蓝光|web-?dl|blu-?ray|hdr|杜比|高码率|更新至|更\s*\d+\s*[集期]|第\s*[\d一二三四五六七八九十]+\s*[季集期]|全\s*\d+\s*集|综艺|电影|电视剧|剧集|短剧|动漫|动画|番剧|纪录片|字幕|国语|粤语|mp4|mkv)/i;
+const BOOKISH = /(txt|epub|mobi|azw3|小说|全本|全文|完结|番外|精校|文包|作者|晋江|起点|番茄|长佩|同人文)/i;
+const PAN = {good:[], rest:[], all:false};
+$("panMore").onclick = () => { PAN.all = !PAN.all; renderPan(); };
+function renderPan(){
+  const items = PAN.all ? PAN.good.concat(PAN.rest) : PAN.good;
   $("panBox").hidden=false; $("panCount").textContent=items.length+" 条"; const box=$("panList"); box.textContent="";
-  if (!items.length) box.append(el("p","hint","没搜到。换个关键词，比如只搜书名或只搜作者。"));
+  $("panMore").hidden = !PAN.rest.length;
+  $("panMore").textContent = PAN.all ? "收起不相关的" : "另有 "+PAN.rest.length+" 条不太相关的（标题没有关键词，或是影视），点这里看";
+  if (!items.length) box.append(el("p","hint","这里没有可显示的结果。"));
   for (const it of items){
     const d=el("div","item"), t=el("div","t"); t.append(el("span","tag",CLOUD[it.type]||it.type), document.createTextNode(it.note||"(没有说明)")); d.append(t);
     d.append(el("div","s",[it.date, it.password?"提取码 "+it.password:""].filter(Boolean).join(" · ")));
@@ -718,6 +733,14 @@ $("updBtn").onclick = async () => {
   try{ (await sub).remove(); }catch(e){}
   btn.disabled=false; btn.textContent="下载并安装新版本";
 };
+if (NATIVE){
+  Capacitor.nativePromise("SystemBars", "setStyle", {style: matchMedia("(prefers-color-scheme: dark)").matches ? "DARK" : "LIGHT"}).catch(()=>{});
+  setTimeout(() => {
+    const probe = el("div"); probe.style.cssText = "position:fixed;top:0;left:0;width:1px;height:env(safe-area-inset-top,0px);visibility:hidden"; document.body.append(probe);
+    const envTop = probe.offsetHeight; probe.remove();
+    if (!getComputedStyle(document.documentElement).getPropertyValue("--safe-area-inset-top").trim() && !envTop) document.documentElement.style.setProperty("--top", "36px");
+  }, 700);
+}
 if (NATIVE && VER) checkUpdate().then(m => { if (LATEST > VER) $("updMsg").textContent = m; });
 </script>
 </body>

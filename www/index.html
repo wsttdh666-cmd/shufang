@@ -114,6 +114,7 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
       <label for="cardChar">做成角色卡的角色（留空则选出场最多的）<input type="text" id="cardChar" autocomplete="off"></label>
     </div>
     <label for="cardCover">角色卡封面图（可选）<input type="file" id="cardCover" accept="image/*"></label>
+    <label for="cardProf">用哪个模型接口<select id="cardProf"></select></label>
     <details><summary>高级设置</summary>
       <div class="grid" style="margin-top:8px">
         <label for="cSize">每次读多少字<input type="number" id="cSize" value="20000" min="5000" max="60000" step="5000" inputmode="numeric"></label>
@@ -144,21 +145,27 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
 <div class="view" id="v-keys" hidden>
   <p class="note">这里填的东西只保存在这台手机的 App 里。</p>
   <section>
-    <h2>模型接口<small>制卡用，和酒馆里填的一样</small></h2>
-    <label for="k_api_base">接口地址（一般以 /v1 结尾）<input type="text" id="k_api_base" placeholder="https://……/v1" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <h2>模型接口<small>制卡用，可以存多个，随时切换</small></h2>
+    <div class="list" id="profList"></div>
+    <div class="row fill"><button id="profAdd">新增一个接口</button></div>
+  </section>
+  <section id="profForm" hidden>
+    <h2 id="profFormTitle">新增接口</h2>
+    <label for="p_name">名字（自己起，方便认）<input type="text" id="p_name" autocomplete="off"></label>
+    <label for="p_base">接口地址（一般以 /v1 结尾，和酒馆里填的一样）<input type="text" id="p_base" placeholder="https://……/v1" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
     <div class="grid">
-      <label for="k_api_key">密钥<input type="password" id="k_api_key" autocomplete="off"></label>
-      <label for="k_model">模型名<input type="text" id="k_model" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+      <label for="p_key">密钥<input type="password" id="p_key" autocomplete="off"></label>
+      <label for="p_model">模型名<input type="text" id="p_model" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
     </div>
     <div class="row"><button class="small" id="testLlm">测试连接</button><span class="hint" id="llmMsg"></span></div>
+    <div class="row fill"><button class="primary" id="profSave">保存</button><button id="profCancel">取消</button></div>
   </section>
   <section>
     <h2>网盘搜索服务</h2>
     <label for="k_pansou">服务地址<input type="text" id="k_pansou" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
     <label for="k_pansou_token">口令（服务要求登录时才填）<input type="password" id="k_pansou_token" autocomplete="off"></label>
+    <div class="row"><button class="small" id="saveKeys">保存搜索设置</button><span class="hint" id="keysMsg"></span></div>
   </section>
-  <div class="row fill"><button class="primary" id="saveKeys">保存</button></div>
-  <p class="hint" id="keysMsg"></p>
   <section>
     <h2>版本<small id="ver"></small></h2>
     <div class="row fill"><button id="checkBtn">检查更新</button><button class="primary" id="updBtn" hidden>下载并安装新版本</button></div>
@@ -363,10 +370,20 @@ function cacheGet(k){try{const v=localStorage.getItem("n2c:"+k);return v?JSON.pa
 function cacheSet(k,v){try{localStorage.setItem("n2c:"+k,JSON.stringify(v));}catch(e){}}
 
 /* ---------- 设置 ---------- */
-const CFG_KEYS = ["api_base","api_key","model","pansou","pansou_token"];
-let CFG = {api_base:"", api_key:"", model:"", pansou:"https://so.252035.xyz", pansou_token:""};
+const CFG_KEYS = ["pansou","pansou_token"];
+let CFG = {profiles:[], active:"", pansou:"https://so.252035.xyz", pansou_token:""};
 try { Object.assign(CFG, JSON.parse(localStorage.getItem("sf:cfg") || "{}")); } catch(e){}
-function saveCfg(){ for (const k of CFG_KEYS) CFG[k] = $("k_"+k).value.trim(); try{ localStorage.setItem("sf:cfg", JSON.stringify(CFG)); }catch(e){} }
+if (!Array.isArray(CFG.profiles)) CFG.profiles = [];
+const newId = () => Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+if (CFG.api_base){   // 旧版只有一组接口: 搬成第一个
+  CFG.profiles.push({id:newId(), name:"默认", api_base:CFG.api_base, api_key:CFG.api_key||"", model:CFG.model||""});
+  delete CFG.api_base; delete CFG.api_key; delete CFG.model;
+}
+function persist(){ if (!CFG.profiles.some(p=>p.id===CFG.active)) CFG.active = CFG.profiles.length ? CFG.profiles[0].id : "";
+  try{ localStorage.setItem("sf:cfg", JSON.stringify(CFG)); }catch(e){} }
+persist();
+const prof = () => CFG.profiles.find(p=>p.id===CFG.active) || null;
+function saveCfg(){ for (const k of CFG_KEYS) CFG[k] = $("k_"+k).value.trim(); persist(); }
 for (const k of CFG_KEYS) $("k_"+k).value = CFG[k] || "";
 
 /* ---------- 联网: App 里走原生请求(不受跨域限制, 可设超时), 浏览器里走 fetch ---------- */
@@ -392,7 +409,7 @@ const ERR = {
   notfound:"接口地址或模型名不对。到“密钥”里改。",
   network:"连不上。检查网络和地址。",
   cancelled:"已暂停。点“继续”接着来。",
-  nokey:"还没填模型接口。到“密钥”里填好并测试。"
+  nokey:"还没有可用的模型接口。到“密钥”里新增一个并测试。"
 };
 function parseJson(s){
   s = String(s).replace(/<think>[\s\S]*?<\/think>/g,"").trim();
@@ -402,12 +419,12 @@ function parseJson(s){
   if (a<0 || b<=a) throw {code:"invalid_json"};
   try { return JSON.parse(s.slice(a,b+1)); } catch(e){ throw {code:"invalid_json"}; }
 }
-async function apiText(prompt){
-  const base = CFG.api_base.replace(/\/+$/,"");
-  if (!base || !CFG.api_key || !CFG.model) throw {code:"nokey"};
+async function apiText(prompt, p = prof()){
+  const base = String((p && p.api_base) || "").replace(/\/+$/,"");
+  if (!base || !p.api_key || !p.model) throw {code:"nokey"};
   const url = /\/chat\/completions$/.test(base) ? base : base + "/chat/completions";
-  const r = await http(url, {method:"POST", timeout:300000, headers:{Authorization:"Bearer "+CFG.api_key},
-    json:{model:CFG.model, temperature:0.4, messages:[{role:"user", content:prompt}]}});
+  const r = await http(url, {method:"POST", timeout:300000, headers:{Authorization:"Bearer "+p.api_key},
+    json:{model:p.model, temperature:0.4, messages:[{role:"user", content:prompt}]}});
   if (r.status < 200 || r.status >= 300){
     const d = typeof r.data === "string" ? r.data : JSON.stringify(r.data);
     throw {code: r.status===429?"rate_limited" : (r.status===401||r.status===403)?"auth" : r.status===404?"notfound" : "upstream_error", detail:"HTTP "+r.status+" "+String(d).slice(0,200)};
@@ -542,7 +559,8 @@ $("cardCover").onchange = ev => { S.coverFile = ev.target.files[0] || null; };
 async function cardStart(){
   const id=$("cardBook").value; $("cardProg").hidden=false; $("cardRes").hidden=true; $("cardLog").textContent=""; $("cardBar").style.width="0%";
   if (!id){ setMsg("先从书架选一本书。", true); return; }
-  if (!CFG.api_base || !CFG.api_key || !CFG.model){ setMsg(ERR.nokey, true); return; }
+  const p = prof(); if (!p || !p.api_base || !p.api_key || !p.model){ setMsg(ERR.nokey, true); return; }
+  log("使用接口："+p.name+"（"+p.model+"）");
   const text = await bookText(id); if (!text){ setMsg("这本书读不出来，重新导入一次。", true); return; }
   const r = splitChunks(text, Math.max(5000, Math.min(60000, +$("cSize").value||20000)));
   Object.assign(S, {name:$("cardName").value.trim()||"未命名", chunks:r.chunks, res:new Array(r.chunks.length).fill(null), ents:null, card:null, skipped:0, stop:false, built:null});
@@ -556,7 +574,7 @@ async function cardRun(){
     for (let i=0;i<n;i++){
       if (S.stop) throw {code:"cancelled"};
       if (!S.res[i]){
-        const k = hash(CFG.model+"|"+S.chunks[i]), c = cacheGet(k);
+        const k = hash((prof()||{}).model+"|"+S.chunks[i]), c = cacheGet(k);
         if (c) S.res[i]=c;
         else {
           setMsg("正在读第 "+(i+1)+" / "+n+" 块");
@@ -636,9 +654,50 @@ outBtn("shareWb","share", () => [safe(S.name)+"_世界书.json", S.built.wb]);
 
 /* ---------- 密钥 ---------- */
 $("saveKeys").onclick = () => { saveCfg(); $("keysMsg").textContent="已保存。"; };
-$("testLlm").onclick = async () => { saveCfg(); $("llmMsg").textContent="测试中…";
-  try{ const t = await apiText("请只回复两个字：正常"); $("llmMsg").textContent="连接成功，模型回复："+t.trim().slice(0,30); }
-  catch(e){ $("llmMsg").textContent = (ERR[e.code]||"连接失败。")+(e.detail?"（"+e.detail+"）":""); } };
+let EDITING = null;   // 正在编辑的接口 id; 新增时是 ""
+const hostOf = u => { try{ return new URL(u).host; }catch(e){ return u; } };
+function renderProfs(){
+  const box=$("profList"); box.textContent="";
+  if (!CFG.profiles.length) box.append(el("p","hint","还没有接口。点下面“新增一个接口”，填酒馆里用的那三样。"));
+  for (const p of CFG.profiles){
+    const on = p.id===CFG.active, d=el("div","item"), t=el("div","t"); t.append(document.createTextNode(p.name));
+    if (on){ const g=el("span","tag","使用中"); g.style.marginLeft="8px"; t.append(g); }
+    d.append(t, el("div","s",[p.model, hostOf(p.api_base)].filter(Boolean).join(" · ")));
+    const row=el("div","row");
+    if (!on){ const u=el("button","small primary","用这个"); u.onclick=()=>{ CFG.active=p.id; persist(); renderProfs(); }; row.append(u); }
+    const ed=el("button","small","编辑"), del=el("button","small","删除");
+    ed.onclick = () => openForm(p);
+    del.onclick = () => { if (del.dataset.sure!=="1"){ del.dataset.sure="1"; del.textContent="再点一次确认删除"; return; }
+      CFG.profiles = CFG.profiles.filter(x=>x.id!==p.id); persist(); if (EDITING===p.id) closeForm(); renderProfs(); };
+    row.append(ed, del); d.append(row); box.append(d);
+  }
+  const sel=$("cardProf"); sel.textContent="";
+  if (!CFG.profiles.length){ const o=el("option",null,"还没有接口，先去“密钥”新增"); o.value=""; sel.append(o); }
+  for (const p of CFG.profiles){ const o=el("option",null,p.name+"（"+p.model+"）"); o.value=p.id; sel.append(o); }
+  sel.value = CFG.active;
+}
+function openForm(p){
+  EDITING = p ? p.id : ""; $("profFormTitle").textContent = p ? "编辑接口" : "新增接口";
+  $("p_name").value = p ? p.name : ""; $("p_base").value = p ? p.api_base : ""; $("p_key").value = p ? p.api_key : ""; $("p_model").value = p ? p.model : "";
+  $("llmMsg").textContent=""; $("profForm").hidden=false; $("profAdd").hidden=true; $("profForm").scrollIntoView({block:"start"});
+}
+function closeForm(){ EDITING=null; $("profForm").hidden=true; $("profAdd").hidden=false; }
+const formProf = () => ({name:$("p_name").value.trim(), api_base:$("p_base").value.trim(), api_key:$("p_key").value.trim(), model:$("p_model").value.trim()});
+$("profAdd").onclick = () => openForm(null);
+$("profCancel").onclick = closeForm;
+$("profSave").onclick = () => {
+  const f = formProf();
+  if (!f.api_base || !f.api_key || !f.model){ $("llmMsg").textContent="接口地址、密钥、模型名都要填。"; return; }
+  if (!f.name) f.name = f.model;
+  const cur = CFG.profiles.find(x=>x.id===EDITING);
+  if (cur) Object.assign(cur, f); else { f.id=newId(); CFG.profiles.push(f); if (CFG.profiles.length===1) CFG.active=f.id; }
+  persist(); closeForm(); renderProfs();
+};
+$("testLlm").onclick = async () => { $("llmMsg").textContent="测试中…";
+  try{ const t = await apiText("请只回复两个字：正常", formProf()); $("llmMsg").textContent="连接成功，模型回复："+t.trim().slice(0,30); }
+  catch(e){ $("llmMsg").textContent = (e.code==="nokey" ? "接口地址、密钥、模型名都要填。" : (ERR[e.code]||"连接失败。"))+(e.detail?"（"+e.detail+"）":""); } };
+$("cardProf").onchange = () => { CFG.active = $("cardProf").value; persist(); renderProfs(); };
+renderProfs();
 
 /* ---------- 更新 ---------- */
 $("ver").textContent = VER ? "第 "+VER+" 版" : "测试版";

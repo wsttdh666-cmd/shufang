@@ -92,6 +92,77 @@ public class TomatoEnginePlugin extends Plugin {
         call.resolve(info(alive(), alive() ? "running" : "stopped"));
     }
 
+    // 下载产出的 txt 可能落在引擎自己选的保存路径（不一定等于 data-dir），
+    // 这里直接在 App 私有目录里递归找最新的 .txt 读回来，不依赖引擎的文件接口。
+    // 参数：title（书名，用来优先匹配）、sinceMs（只认这个时间点之后新建/改动的文件）。
+    @PluginMethod
+    public void readBook(PluginCall call) {
+        final String title = call.getString("title", "");
+        final Double sinceD = call.getDouble("sinceMs", 0.0);
+        final long since = sinceD == null ? 0L : sinceD.longValue();
+        new Thread(() -> {
+            try {
+                java.util.ArrayList<File> txts = new java.util.ArrayList<>();
+                collectTxt(getContext().getFilesDir(), txts, 0);
+                collectTxt(getContext().getCacheDir(), txts, 0);
+                // 时间过滤（给点宽容）
+                if (since > 0) {
+                    java.util.ArrayList<File> recent = new java.util.ArrayList<>();
+                    for (File f : txts) if (f.lastModified() >= since - 5000) recent.add(f);
+                    if (!recent.isEmpty()) txts = recent;
+                }
+                if (txts.isEmpty()) { call.resolve(new JSObject().put("found", false)); return; }
+                File best = pickBest(txts, normalize(title));
+                byte[] data = readFileBytes(best);
+                call.resolve(new JSObject()
+                    .put("found", true)
+                    .put("name", best.getName())
+                    .put("path", best.getAbsolutePath())
+                    .put("size", data.length)
+                    .put("base64", Base64.encodeToString(data, Base64.NO_WRAP)));
+            } catch (Exception e) {
+                call.reject("读取下载文件失败：" + String.valueOf(e.getMessage()));
+            }
+        }).start();
+    }
+
+    private static String normalize(String s) {
+        return s == null ? "" : s.replaceAll("\\s+", "");
+    }
+
+    // 递归收集 .txt（限制深度和数量，避免扫爆）
+    private static void collectTxt(File dir, java.util.ArrayList<File> out, int depth) {
+        if (dir == null || !dir.isDirectory() || depth > 6 || out.size() > 4000) return;
+        File[] fs = dir.listFiles();
+        if (fs == null) return;
+        for (File f : fs) {
+            if (f.isDirectory()) collectTxt(f, out, depth + 1);
+            else if (f.getName().toLowerCase().endsWith(".txt") && f.length() > 0) out.add(f);
+        }
+    }
+
+    // 优先选文件名里含书名的；同类里选最新改动的；没书名匹配就全局选最新的
+    private static File pickBest(java.util.ArrayList<File> txts, String title) {
+        File hit = null, newest = null;
+        for (File f : txts) {
+            if (newest == null || f.lastModified() > newest.lastModified()) newest = f;
+            if (!title.isEmpty() && normalize(f.getName()).contains(title)) {
+                if (hit == null || f.lastModified() > hit.lastModified()) hit = f;
+            }
+        }
+        return hit != null ? hit : newest;
+    }
+
+    private static byte[] readFileBytes(File f) throws Exception {
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return out.toByteArray();
+        }
+    }
+
     @PluginMethod
     public void stop(PluginCall call) {
         killEngine();

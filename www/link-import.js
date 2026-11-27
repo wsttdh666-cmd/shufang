@@ -234,42 +234,26 @@
         return null;
       },
       async load(id){
-        // App 里：走内置番茄引擎（官方接口，正文是干净文字）。浏览器预览里没有引擎，退回网页解析。
+        // App 里：目录和每章标题从番茄网页取；正文用内置引擎下载（干净文字）。
+        // 浏览器预览里没有引擎，退回纯网页解析（加密字体）。
         if (NATIVE){
-          try { return await this.loadEngine(id); }
-          catch(e){
-            // 引擎这边出问题（没起来/架构不支持/网络），退回网页原样（加密字体）
-            const b = await this.loadWeb(id);
-            b.notice = "番茄引擎没能用（" + ((e && e.message) || e) + "），退回网页原样：正文是加密字体，约一半字会显示成空白或方框。";
-            return b;
+          let engineErr = "";
+          try { await engineEnsure(); }
+          catch(e){ engineErr = (e && e.message) || String(e); }
+          const b = await this.loadWeb(id);   // 书名 + 目录（含每章标题）
+          if (!engineErr){
+            b.engine = true;
+            b.encrypted = false;
+            // 引擎走官方接口，网页标记的付费章节也一并尝试下
+            for (const c of b.chapters){ c.state = "可导"; c.why = ""; }
+            b.chapter_count = b.chapters.length;
+            b.notice = "用内置番茄引擎下载，正文是干净文字。下面是每一章的标题，勾选要下的章——番茄按选中范围的首尾章整段下载。";
+          } else {
+            b.notice = "番茄引擎没能用（" + engineErr + "），退回网页原样：正文是加密字体，约一半字会显示成空白或方框。";
           }
+          return b;
         }
         return this.loadWeb(id);
-      },
-      // 引擎模式：预览拿书的信息和章节数；下载由任务完成，不逐章抓
-      async loadEngine(id){
-        await engineEnsure();
-        const r = await engineJson("/api/preview/" + encodeURIComponent(id));
-        if (r.status !== 200 || !r.data) throw new Error("引擎读取书籍信息失败（HTTP " + r.status + "）");
-        const p = r.data;
-        const title = p.book_name || p.title || p.original_book_name || "";
-        if (!title) throw new Error("没读到这本书的信息（可能是链接里的 book_id 不对）");
-        const n = parseInt(p.chapter_count, 10) || 0;
-        const wn = parseInt(p.word_count || p.word_number || p.words, 10) || 0;
-        return {
-          id,
-          url: "https://fanqienovel.com/page/" + id,
-          title,
-          author: p.author || "",
-          status: (p.finished === true ? "已完结" : p.finished === false ? "连载中" : ""),
-          words: wn ? wanzi(wn) : "",
-          intro: clean(p.description || p.desc || p.abstract || ""),
-          chapter_count: n,
-          chapters: [],              // 引擎模式不逐章渲染；按范围下载
-          engine: true,
-          encrypted: false,
-          notice: "用内置番茄引擎下载，正文是干净文字（不是网页加密字体）。首次下载会初始化引擎，稍等几秒。整本很大时建议分段下。"
-        };
       },
       // 网页兜底：和以前一样，解析 __INITIAL_STATE__，正文是加密字体
       async loadWeb(id){
@@ -491,35 +475,26 @@
   function showBook(){
     const b = book;
     const eng = !!b.engine;
-    const total = eng ? (b.chapter_count || 0) : b.chapters.length;
-    const ok = eng ? total : b.chapters.filter(c => c.state === "可导").length;
+    const ok = b.chapters.filter(c => c.state === "可导").length;
     $("bkTitle").textContent = b.title;
     $("bkPlatform").textContent = b.platform;
-    $("bkMeta").textContent = [b.author && "作者：" + b.author, b.status, b.words, "目录 " + total + " 章"].filter(Boolean).join(" · ");
+    $("bkMeta").textContent = [b.author && "作者：" + b.author, b.status, b.words, "目录 " + b.chapters.length + " 章"].filter(Boolean).join(" · ");
     $("bkIntro").textContent = b.intro || "（没有简介）";
     $("bkAvail").textContent = eng
-      ? "可下载 " + total + " 章，正文是干净文字。下面填章节范围（留空＝整本）。"
+      ? "共 " + b.chapters.length + " 章，正文是干净文字。勾选要下的章，番茄按选中范围的首尾章整段下。"
       : "可导出 " + ok + " 章" + (b.encrypted ? "（加密原样）" : "") + "，导不了 " + (b.chapters.length - ok) + " 章。";
     setStatus("bkNotice", b.notice || "", b.notice ? "warn" : "");
     b.cmtOk = b.key === "jjwxc";
-    const first = eng ? 1 : b.chapters[0].num;
-    const last = eng ? (total || 1) : b.chapters[b.chapters.length - 1].num;
-    $("bkFrom").value = first; $("bkTo").value = last;
-    $("bkFrom").max = $("bkTo").max = last;
+    for (const c of b.chapters){ c.pick = c.state === "可导"; c.cmt = false; }
+    const firstNum = b.chapters[0] ? b.chapters[0].num : 1;
+    const lastNum = b.chapters[b.chapters.length - 1] ? b.chapters[b.chapters.length - 1].num : firstNum;
+    $("bkFrom").value = firstNum; $("bkTo").value = lastNum;
+    $("bkFrom").max = $("bkTo").max = lastNum;
     $("bkCmtRow").hidden = !b.cmtOk;
     $("bkCmtHint").textContent = b.cmtOk ? "段评按章选：在下面每章右边勾“段评”，或者用上面的按钮批量勾。带段评会慢不少，每一段都要单独去取。"
-      : "番茄用内置引擎整本/范围下载，没有逐章段评。";
+      : "番茄用内置引擎下载，没有逐章段评。";
     $("bkAddShelf").textContent = "加入书架";
-    if (eng){
-      // 引擎模式：按范围下载，不逐章渲染（整本可能几千章，渲染会卡）
-      const box = $("bkList"); box.textContent = "";
-      box.append(el("div", "note", "番茄按整本 / 范围下载：改上面的起止章（留空就是整本），直接点“开始下载”。"));
-      $("bkRange").textContent = "将下载第 " + first + "–" + last + " 章（整本）。";
-      $("bkStart").disabled = false;
-    } else {
-      for (const c of b.chapters){ c.pick = c.state === "可导"; c.cmt = false; }
-      drawPicks();
-    }
+    drawPicks();
     $("bkInfo").hidden = false;
   }
   function drawPicks(){
@@ -543,7 +518,7 @@
     countRange();
   }
   $("bkList").addEventListener("change", e => {
-    const t = e.target; if (!t.dataset || t.dataset.i === undefined || !book || book.engine) return;
+    const t = e.target; if (!t.dataset || t.dataset.i === undefined || !book) return;
     const c = book.chapters[+t.dataset.i];
     if (t.dataset.k === "pick"){ c.pick = t.checked; if (!c.pick && c.cmt){ c.cmt = false; drawPicks(); return; } }
     else { c.cmt = t.checked; if (c.cmt && !c.pick){ c.pick = true; drawPicks(); return; } }
@@ -551,12 +526,17 @@
   });
   function picked(){ return book.chapters.filter(c => c.pick && c.state === "可导"); }
   function countRange(){
-    if (!book || book.engine) return;
+    if (!book) return;
     const p = picked(), n = p.filter(c => c.cmt).length;
-    $("bkRange").textContent = "已选 " + p.length + " 章" + (book.cmtOk ? "，其中 " + n + " 章带段评" : "") + "。";
+    let txt = "已选 " + p.length + " 章" + (book.cmtOk ? "，其中 " + n + " 章带段评" : "") + "。";
+    if (book.engine && p.length){
+      const nums = p.map(c => c.num), lo = Math.min.apply(null, nums), hi = Math.max.apply(null, nums);
+      if (hi > lo) txt += "番茄按范围下，实际会下第 " + lo + "–" + hi + " 章。";
+    }
+    $("bkRange").textContent = txt;
     $("bkStart").disabled = !p.length;
   }
-  function setAll(fn){ if (!book || book.engine) return; book.chapters.forEach(c => { if (c.state === "可导") fn(c); }); drawPicks(); }
+  function setAll(fn){ if (!book) return; book.chapters.forEach(c => { if (c.state === "可导") fn(c); }); drawPicks(); }
   $("bkPickAll").onclick = $("bkPickAll2").onclick = () => setAll(c => { c.pick = true; });
   $("bkPickNone").onclick = $("bkPickNone2").onclick = () => setAll(c => { c.pick = false; c.cmt = false; });
   $("bkPickRange").onclick = () => {
@@ -598,7 +578,12 @@
   };
 
   $("bkStart").onclick = () => {
-    if (book && book.engine){ startEngineDownload(); return; }
+    if (book && book.engine){
+      const sel = picked();
+      if (!sel.length){ setStatus("bkMsg", "先勾选要下载的章节。", "warn"); return; }
+      startEngineDownload(sel);
+      return;
+    }
     const list = picked();
     if (!list.length){ setStatus("bkMsg", "这个范围里没有能导的章节。", "warn"); return; }
     const n = +$("bkCmtN").value || 5;
@@ -612,19 +597,19 @@
   $("bkBack").onclick = () => { if (run && run.active) return; $("bkRun").hidden = true; if (book) $("bkInfo").hidden = false; };
 
   /* ---------------- 番茄：引擎任务式下载 ---------------- */
-  async function startEngineDownload(){
+  async function startEngineDownload(sel){
     const b = book;
-    const total = b.chapter_count || 0;
-    let f = parseInt($("bkFrom").value, 10), t = parseInt($("bkTo").value, 10);
-    if (!f || f < 1) f = 1;
-    if (!t || t < 1) t = total || 0;
-    let lo = Math.min(f, t), hi = Math.max(f, t);
-    if (total){ lo = Math.max(1, lo); hi = Math.min(total, hi); }
-    const whole = (!total) || (lo <= 1 && hi >= total);
+    const total = b.chapters.length || 0;
+    // 番茄引擎按章节序号范围下载：取选中章里的最小/最大序号
+    const nums = sel.map(c => c.num).filter(n => n > 0);
+    let lo = Math.min.apply(null, nums), hi = Math.max.apply(null, nums);
+    if (!isFinite(lo)) lo = 1;
+    if (!isFinite(hi)) hi = total || 1;
+    const whole = (lo <= (b.chapters[0] ? b.chapters[0].num : 1)) && (hi >= (b.chapters[b.chapters.length-1] ? b.chapters[b.chapters.length-1].num : hi));
     const payload = {id: String(b.id), book_id: String(b.id)};
     if (!whole){ payload.range_start = lo; payload.range_end = hi; }
 
-    run = {engine:true, book:b, active:true, stop:false, jobId:null, savedId:null, savedName:null};
+    run = {engine:true, book:b, active:true, stop:false, jobId:null, savedId:null, savedName:null, startedAt: Date.now()};
     $("bkInfo").hidden = true; $("bkRun").hidden = false; $("bkDone").hidden = true;
     $("bkRunTitle").textContent = "《" + b.title + "》 番茄" + (whole ? "（整本）" : "（" + lo + "–" + hi + " 章）");
     $("bkRunList").textContent = "";
@@ -709,10 +694,18 @@
   async function engineImport(job){
     const b = book;
     try {
-      const rel = await engineFindFile(b);
-      if (!rel) throw new Error("下载完成了，但没找到引擎输出的 txt 文件");
-      const text = await engineReadFile(rel);
-      if (!text || !text.trim()) throw new Error("取回的正文是空的");
+      let text = "";
+      // 主路径：让原生插件直接在 App 私有目录里找最新的 .txt 读回来（不依赖引擎的文件接口）
+      try {
+        const nr = await Capacitor.nativePromise("TomatoEngine", "readBook", {title: b.title, sinceMs: run.startedAt || 0});
+        if (nr && nr.found && nr.base64) text = decode(Uint8Array.from(atob(nr.base64), c => c.charCodeAt(0)));
+      } catch(e){}
+      // 兜底：走引擎自己的文件接口
+      if (!text){
+        const rel = await engineFindFile(b);
+        if (rel) text = await engineReadFile(rel);
+      }
+      if (!text || !text.trim()) throw new Error("下载完成了，但没取到正文文件（引擎日志在 files/tomato/engine.log）");
       const partial = run.partial || 0;
       const name = b.title + (partial ? "（缺 " + partial + " 章）" : "");
       run.savedName = name;

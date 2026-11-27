@@ -434,8 +434,16 @@ public class ScriptActivity extends Activity {
         else super.onBackPressed();
     }
 
+    // 离开这个页面时马上把登录状态写到手机里；不然系统是隔一阵才写，App 被划掉就可能丢
+    @Override
+    protected void onPause() {
+        super.onPause();
+        CookieManager.getInstance().flush();
+    }
+
     @Override
     protected void onDestroy() {
+        CookieManager.getInstance().flush();
         pool.shutdownNow();
         web.destroy();
         super.onDestroy();

@@ -67,6 +67,16 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
 .chlist .ch.off{color:var(--mute)}
 .chlist .ch.bad{color:var(--warn)}
 .intro{white-space:pre-wrap;font-size:14px;margin:6px 0 0}
+.chlist.pick{max-height:380px;padding:0}
+.chlist.pick .ck{display:flex;flex-direction:row;align-items:center;gap:8px;padding:4px 10px;border-bottom:1px solid var(--line)}
+.chlist.pick .ck:last-child{border-bottom:0}
+.chlist.pick .ck .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chlist.pick .ck.off .nm{color:var(--mute)}
+.chlist.pick .ck input{width:20px;height:20px;margin:0;flex:none}
+.chlist.pick .ck .cm{display:flex;flex-direction:row;align-items:center;gap:3px;font-size:12px;color:var(--mute);flex:none}
+.chlist.pick .ck.nocmt .cm{display:none}
+label.inline{flex-direction:row;align-items:center;gap:6px}
+label.inline select{width:auto;padding:6px 8px;font-size:14px}
 #bkPlatform{margin-right:8px}
 .seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .seg button{flex:1;border:0;border-radius:0;min-height:42px;background:var(--surface);color:var(--mute)}
@@ -118,17 +128,12 @@ nav button[aria-selected=true]{color:var(--accent);font-weight:700;box-shadow:in
       <label for="bkFrom">从第几章<input type="number" id="bkFrom" min="1" inputmode="numeric"></label>
       <label for="bkTo">到第几章<input type="number" id="bkTo" min="1" inputmode="numeric"></label>
     </div>
-    <div class="row"><button class="small" id="bkAll">全部</button><span class="hint" id="bkRange"></span></div>
-    <label for="bkCmt" id="bkCmtBox">段评
-      <select id="bkCmt">
-        <option value="0">不带段评</option>
-        <option value="5">带段评，每段最多 5 条</option>
-        <option value="20">带段评，每段最多 20 条</option>
-        <option value="50">带段评，每段最多 50 条</option>
-      </select>
-    </label>
+    <div class="row"><button class="small" id="bkPickRange">只选这个范围</button><button class="small" id="bkPickAll">全选</button><button class="small" id="bkPickNone">全不选</button></div>
+    <div class="row" id="bkCmtRow"><button class="small" id="bkCmtOn">选中的都带段评</button><button class="small" id="bkCmtOff">都不带段评</button>
+      <label for="bkCmtN" class="inline">每段最多<select id="bkCmtN"><option value="5">5 条</option><option value="20">20 条</option><option value="50">50 条</option></select></label></div>
     <p class="hint" id="bkCmtHint"></p>
-    <div class="chlist" id="bkList"></div>
+    <p id="bkRange"></p>
+    <div class="chlist pick" id="bkList"></div>
     <div class="row fill"><button class="primary" id="bkStart">开始下载</button><button id="bkAddShelf">加入书架</button></div>
   </section>
 

@@ -76,7 +76,7 @@
           words, intro: textOf(q("#novelintro")), chapters,
           encrypted: LOGIN.jjwxc && chapters.some(c => c.vip),
           notice: !chapters.some(c => c.vip) ? ""
-            : LOGIN.jjwxc ? "VIP 章节会按你账号买过的下载，正文是网页原样（加密字体，约一部分字显示成空白或方框），不做还原。没买的章节会标成失败。"
+            : LOGIN.jjwxc ? "VIP 章节下载的是网页原样（加密字体，一部分字会显示成空白或方框），不做还原。没买的章节晋江网页不给正文，会标成“未购买”，txt 里保留章节名。"
             : "这本有 VIP 章节。登录晋江后，买过的 VIP 章节也能下（网页原样，加密字体）。"
         };
       },
@@ -86,7 +86,7 @@
         if (!body && ch.vip){
           if (/login\.php|请先登录|您还没有登录/.test(html) && !doc.querySelector(".noveltext")) throw new Error("登录过期了，重新登录晋江");
           const box = doc.querySelector(".noveltext");
-          if (!box || /购买|订阅本章|余额不足/.test(box.textContent) && box.textContent.length < 400) throw new Error("这章没买");
+          if (!box || /购买|订阅本章|余额不足/.test(box.textContent) && box.textContent.length < 400) return {text:"", note:"", unbought:true};
           body = box.cloneNode(true);
           body.querySelectorAll("[id^=favorite], #report_box, .float_favorite, #mongolia_layer, h2, script, style, div[align=center], [style*='display:none' i], [style*='display: none' i], .readsmall, #note_danmu_wrapper").forEach(n => n.remove());
         }
@@ -279,7 +279,7 @@
 
   /* ---------------- 界面 ---------------- */
   let book = null, run = null;
-  const ST = {wait:"·", ok:"✓", fail:"✗", skip:"—", busy:"…"};
+  const ST = {wait:"·", ok:"✓", fail:"✗", skip:"—", busy:"…", nobuy:"○"};
   function setStatus(id, t, kind){ const e = $(id); e.textContent = t; e.className = "note" + (kind ? " " + kind : ""); e.hidden = !t; }
 
   $("bkRecognize").onclick = async () => {
@@ -310,26 +310,60 @@
     $("bkIntro").textContent = b.intro || "（没有简介）";
     $("bkAvail").textContent = "可导出 " + ok + " 章" + (b.encrypted ? "（加密原样）" : "") + "，导不了 " + (b.chapters.length - ok) + " 章。";
     setStatus("bkNotice", b.notice || "", b.notice ? "warn" : "");
-    const first = b.chapters.find(c => c.state === "可导"), last = [...b.chapters].reverse().find(c => c.state === "可导");
-    $("bkFrom").value = first ? first.num : 1; $("bkTo").value = last ? last.num : b.chapters.length;
+    b.cmtOk = b.key === "jjwxc";
+    for (const c of b.chapters){ c.pick = c.state === "可导"; c.cmt = false; }
+    $("bkFrom").value = b.chapters[0].num; $("bkTo").value = b.chapters[b.chapters.length - 1].num;
     $("bkFrom").max = $("bkTo").max = b.chapters[b.chapters.length - 1].num;
-    $("bkStart").disabled = !ok;
-    $("bkCmt").disabled = b.key !== "jjwxc";
-    if (b.key !== "jjwxc") $("bkCmt").value = "0";
-    $("bkCmtHint").textContent = b.key === "jjwxc" ? "带段评会慢不少：每一段都要单独去取。热门的书一段可能有上千条，只收每段最前面的几条。"
+    $("bkCmtRow").hidden = !b.cmtOk;
+    $("bkCmtHint").textContent = b.cmtOk ? "段评按章选：在下面每章右边勾“段评”，或者用上面的按钮批量勾。带段评会慢不少，每一段都要单独去取。"
       : "番茄网页版没有段评（只有番茄 App 里有），所以这里不能带。";
-    renderList($("bkList"), b.chapters.map(c => [c.state === "可导" ? "·" : "—", c.num, c.name, c.state === "可导" ? "" : c.why]));
-    countRange();
     $("bkAddShelf").textContent = "加入书架";
+    drawPicks();
     $("bkInfo").hidden = false;
   }
-  function picked(){
-    const from = +$("bkFrom").value || 1, to = +$("bkTo").value || 1e9;
-    return book.chapters.filter(c => c.num >= Math.min(from, to) && c.num <= Math.max(from, to) && c.state === "可导");
+  function drawPicks(){
+    const b = book, box = $("bkList");
+    box.textContent = "";
+    const frag = document.createDocumentFragment();
+    b.chapters.forEach((c, i) => {
+      const can = c.state === "可导";
+      const row = el("label", "ck" + (can ? "" : " off") + (b.cmtOk && can ? "" : " nocmt"));
+      const pk = el("input"); pk.type = "checkbox"; pk.checked = !!c.pick; pk.disabled = !can; pk.dataset.i = i; pk.dataset.k = "pick";
+      pk.setAttribute("aria-label", "下载 " + c.name);
+      const nm = el("span", "nm", c.num + "  " + c.name + (can ? "" : "  （" + c.why + "）"));
+      const cm = el("span", "cm"), cb = el("input"); cb.type = "checkbox"; cb.checked = !!c.cmt; cb.disabled = !can; cb.dataset.i = i; cb.dataset.k = "cmt";
+      cb.setAttribute("aria-label", "带段评 " + c.name);
+      cm.append(cb, document.createTextNode("段评"));
+      cm.onclick = e => e.stopPropagation();       // 点段评那一块，不要连带勾了“下载”
+      row.append(pk, nm, cm);
+      frag.append(row);
+    });
+    box.append(frag);
+    countRange();
   }
-  function countRange(){ if (book) $("bkRange").textContent = "这个范围里能导 " + picked().length + " 章。"; }
-  $("bkFrom").oninput = $("bkTo").oninput = countRange;
-  $("bkAll").onclick = () => { $("bkFrom").value = book.chapters[0].num; $("bkTo").value = book.chapters[book.chapters.length - 1].num; countRange(); };
+  $("bkList").addEventListener("change", e => {
+    const t = e.target; if (!t.dataset || t.dataset.i === undefined || !book) return;
+    const c = book.chapters[+t.dataset.i];
+    if (t.dataset.k === "pick"){ c.pick = t.checked; if (!c.pick && c.cmt){ c.cmt = false; drawPicks(); return; } }
+    else { c.cmt = t.checked; if (c.cmt && !c.pick){ c.pick = true; drawPicks(); return; } }
+    countRange();
+  });
+  function picked(){ return book.chapters.filter(c => c.pick && c.state === "可导"); }
+  function countRange(){
+    if (!book) return;
+    const p = picked(), n = p.filter(c => c.cmt).length;
+    $("bkRange").textContent = "已选 " + p.length + " 章" + (book.cmtOk ? "，其中 " + n + " 章带段评" : "") + "。";
+    $("bkStart").disabled = !p.length;
+  }
+  function setAll(fn){ if (!book) return; book.chapters.forEach(c => { if (c.state === "可导") fn(c); }); drawPicks(); }
+  $("bkPickAll").onclick = () => setAll(c => { c.pick = true; });
+  $("bkPickNone").onclick = () => setAll(c => { c.pick = false; c.cmt = false; });
+  $("bkPickRange").onclick = () => {
+    const f = +$("bkFrom").value || 1, t = +$("bkTo").value || 1e9, lo = Math.min(f, t), hi = Math.max(f, t);
+    setAll(c => { c.pick = c.num >= lo && c.num <= hi; if (!c.pick) c.cmt = false; });
+  };
+  $("bkCmtOn").onclick = () => setAll(c => { if (c.pick) c.cmt = true; });
+  $("bkCmtOff").onclick = () => setAll(c => { c.cmt = false; });
 
   function renderList(box, rows, focus){
     box.textContent = "";
@@ -365,8 +399,9 @@
   $("bkStart").onclick = () => {
     const list = picked();
     if (!list.length){ setStatus("bkMsg", "这个范围里没有能导的章节。", "warn"); return; }
-    const cmt = book.key === "jjwxc" ? +$("bkCmt").value || 0 : 0;
-    run = {book, cmt, from: +$("bkFrom").value, to: +$("bkTo").value, list: list.map(c => Object.assign({}, c, {cmt, st:"wait", text:"", note:"", comments:null, err:""})), next:0, active:false, stop:false, savedId:null};
+    const n = +$("bkCmtN").value || 5;
+    run = {book, cmtN: book.cmtOk ? n : 0, list: list.map(c => Object.assign({}, c, {cmt: book.cmtOk && c.cmt ? n : 0, st:"wait", text:"", note:"", comments:null, err:""})),
+      next:0, active:false, stop:false, savedId:null};
     $("bkInfo").hidden = true; $("bkRun").hidden = false; $("bkDone").hidden = true;
     loop();
   };
@@ -375,12 +410,12 @@
   $("bkBack").onclick = () => { if (run && run.active) return; $("bkRun").hidden = true; if (book) $("bkInfo").hidden = false; };
 
   function draw(){
-    const r = run, n = r.list.length, c = {ok:0, fail:0};
-    r.list.forEach(x => { if (x.st === "ok") c.ok++; else if (x.st === "fail") c.fail++; });
+    const r = run, n = r.list.length, c = {ok:0, fail:0, nobuy:0};
+    r.list.forEach(x => { if (x.st in c) c[x.st]++; });
     $("bkRunTitle").textContent = "《" + r.book.title + "》 " + r.book.platform;
-    $("bkCount").textContent = "已下载 " + c.ok + " / " + n + " 章" + (c.fail ? " · 失败 " + c.fail + " 章" : "");
-    $("bkBar").style.width = Math.round(100 * (c.ok + c.fail) / n) + "%";
-    renderList($("bkRunList"), r.list.map(x => [ST[x.st], x.num, x.name, x.st === "fail" ? x.err : ""]), Math.min(r.next, n - 1));
+    $("bkCount").textContent = "已下载 " + c.ok + " / " + n + " 章" + (c.nobuy ? " · 未购买 " + c.nobuy + " 章" : "") + (c.fail ? " · 失败 " + c.fail + " 章" : "");
+    $("bkBar").style.width = Math.round(100 * (c.ok + c.fail + c.nobuy) / n) + "%";
+    renderList($("bkRunList"), r.list.map(x => [ST[x.st], x.num, x.name + (x.cmt ? "　[段评]" : ""), x.st === "fail" ? x.err : x.st === "nobuy" ? "未购买，晋江网页不给正文" : ""]), Math.min(r.next, n - 1));
     $("bkPause").hidden = !r.active;
     $("bkResume").hidden = r.active || r.next >= n;
     $("bkBack").hidden = r.active;
@@ -399,12 +434,12 @@
         if (r.stop){ setStatus("bkRunMsg", "已暂停。点“继续”接着下。"); break; }
         const ch = r.list[r.next];
         ch.st = "busy"; draw();
-        setStatus("bkRunMsg", "正在下载：" + ch.name + (r.cmt ? "（连段评一起，会慢一点）" : ""));
+        setStatus("bkRunMsg", "正在下载：" + ch.name + (ch.cmt ? "（连段评一起，会慢一点）" : ""));
         let tries = 0;
         for (;;){
           try {
             const got = await plat.chapter(ch);
-            ch.text = got.text; ch.note = got.note || ""; ch.comments = got.comments || null; ch.st = "ok"; streak = 0;
+            ch.text = got.text; ch.note = got.note || ""; ch.comments = got.comments || null; ch.st = got.unbought ? "nobuy" : "ok"; streak = 0;
             break;
           } catch(e){
             const msg = (e && e.message) || String(e);
@@ -429,7 +464,7 @@
   function composeText(r){
     const b = r.book, parts = [b.title, "作者：" + (b.author || "未知") + "　来源：" + b.platform + "　" + b.url];
     if (b.intro) parts.push("简介：\n" + b.intro);
-    if (r.cmt) parts.push("【段评】每段最多收 " + r.cmt + " 条，按晋江网页的顺序。段评跟在对应段落下面，以“【段评】”开头。");
+    if (r.list.some(c => c.cmt)) parts.push("【段评】带段评的章节，每段最多收 " + r.cmtN + " 条，按晋江网页的顺序。段评跟在对应段落下面，以“【段评】”开头。");
     if (b.encrypted){
       const all = r.list.filter(c => c.st === "ok").map(c => c.text).join("");
       const pua = (all.match(/[\uE000-\uF8FF]/g) || []).length;
@@ -437,6 +472,7 @@
         "本文件共 " + all.length + " 字，其中加密字符 " + pua + " 个（" + (all.length ? Math.round(100 * pua / all.length) : 0) + "%），没有做还原。");
     }
     for (const c of r.list){
+      if (c.st === "nobuy") { parts.push(c.name + "\n\n（这一章没买，晋江网页不给正文）"); continue; }
       if (c.st !== "ok") { parts.push(c.name + "\n\n（这一章没有导出：" + (c.err || "未下载") + "）"); continue; }
       const cm = c.comments, say = cm && cm.map && cm.map["-2"];
       parts.push(c.name + "\n\n" + withComments(c.text, cm) + (c.note ? "\n\n作者有话说：\n" + c.note + (say ? "\n" + formatComments(say) : "") : "")
@@ -449,6 +485,7 @@
   }
   async function finish(){
     const r = run, ok = r.list.filter(c => c.st === "ok").length;
+    if (!ok && r.list.some(c => c.st === "nobuy")){ setStatus("bkRunMsg", "选的章节都没买，没有可存的正文。", "warn"); return; }
     if (!ok){ setStatus("bkRunMsg", "一章都没下成，没有存进书架。", "warn"); return; }
     const name = r.book.title + (ok < r.book.chapters.length ? "（" + ok + " 章）" : "");
     r.savedId = await bookAdd(name, composeText(r), undefined, {platform:r.book.platform, url:r.book.url, author:r.book.author});

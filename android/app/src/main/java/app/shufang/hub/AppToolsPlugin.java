@@ -287,18 +287,37 @@ public class AppToolsPlugin extends Plugin {
         }
     }
 
-    // 用隐藏的 WebView 渲染页面，等 JS 加载完后提取正文。VIP 章节的正文靠 JS 动态加载，普通 HTTP 拿不到。
+    // VIP 章节：用全屏 WebView 打开页面，等 JS 渲染完正文后自动提取并关闭。
+    // 隐藏 WebView 拿不到正文（晋江 JS 检查可见性），所以用可见的，用户会短暂看到页面。
     @PluginMethod
     public void getRendered(PluginCall call) {
         final String url = call.getString("url", "");
         final String ua = call.getString("ua", "");
         final int timeout = call.getInt("timeout", 30000);
         new Handler(Looper.getMainLooper()).post(() -> {
-            final WebView wv = new WebView(getContext());
-            // 关键：把 WebView 加到界面上（不可见的 1x1），否则 Android 不会完整执行 JS
             android.view.ViewGroup root = (android.view.ViewGroup) getActivity().getWindow().getDecorView();
-            wv.setVisibility(android.view.View.INVISIBLE);
-            root.addView(wv, new android.view.ViewGroup.LayoutParams(1, 1));
+
+            // 半透明遮罩 + 提示文字
+            android.widget.FrameLayout wrap = new android.widget.FrameLayout(getContext());
+            wrap.setBackgroundColor(0xE0FFFFFF);  // 白色半透明背景
+
+            android.widget.TextView hint = new android.widget.TextView(getContext());
+            hint.setText("正在加载 VIP 正文…");
+            hint.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
+            hint.setTextColor(0xFF5F6878);
+            hint.setGravity(android.view.Gravity.CENTER);
+            android.widget.FrameLayout.LayoutParams hintLp = new android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+            hintLp.gravity = android.view.Gravity.CENTER;
+            wrap.addView(hint, hintLp);
+
+            // WebView 全屏但在提示文字后面（用户看到的是提示）
+            final WebView wv = new WebView(getContext());
+            wrap.addView(wv, 0, new android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+
+            root.addView(wrap, new android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT));
 
             WebSettings s = wv.getSettings();
             s.setJavaScriptEnabled(true);
@@ -308,11 +327,12 @@ public class AppToolsPlugin extends Plugin {
             if (ua != null && !ua.isEmpty()) s.setUserAgentString(ua);
             CookieManager.getInstance().setAcceptCookie(true);
             CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true);
+
             final boolean[] done = {false};
             final Handler h = new Handler(Looper.getMainLooper());
 
             Runnable cleanup = () -> {
-                try { root.removeView(wv); } catch (Exception ignore) {}
+                try { root.removeView(wrap); } catch (Exception ignore) {}
                 try { wv.stopLoading(); wv.destroy(); } catch (Exception ignore) {}
             };
 
@@ -320,12 +340,12 @@ public class AppToolsPlugin extends Plugin {
             h.postDelayed(() -> {
                 if (!done[0]) {
                     done[0] = true;
-                    // 超时时拿一下页面状态用于调试
-                    wv.evaluateJavascript("(function(){var nt=document.querySelector('.noveltext');return JSON.stringify({title:document.title||'',url:location.href,has_nt:!!nt,nt_len:nt?(nt.textContent||'').length:0,nt_text:nt?(nt.textContent||'').substring(0,200):'',body_len:document.body?(document.body.textContent||'').length:0})})()", dbg -> {
-                        cleanup.run();
-                        String info = dbg != null ? dbg : "null";
-                        call.reject("\u7b49\u4e86\u5f88\u4e45\uff0c\u9875\u9762\u91cc\u6ca1\u6709\u51fa\u73b0\u6b63\u6587\u3002\u8c03\u8bd5\u4fe1\u606f\uff1a" + info);
-                    });
+                    wv.evaluateJavascript(
+                        "(function(){var nt=document.querySelector('.noveltext');return JSON.stringify({t:document.title||'',u:location.href,n:!!nt,l:nt?(nt.textContent||'').length:0,p:(nt?(nt.textContent||''):'').substring(0,200),b:document.body?(document.body.textContent||'').length:0})})()",
+                        dbg -> {
+                            cleanup.run();
+                            call.reject("等了很久，页面里没有出现正文。调试：" + (dbg != null ? dbg : "null"));
+                        });
                 }
             }, timeout);
 
@@ -334,23 +354,22 @@ public class AppToolsPlugin extends Plugin {
                 @Override
                 public void onPageFinished(WebView view, String pageUrl) {
                     if (done[0]) return;
-                    // 页面加载完成，等 1 秒让 JS 跑起来，然后开始轮询
-                    h.postDelayed(() -> pollContent(wv, call, done, h, 0, cleanup), 1500);
+                    h.postDelayed(() -> pollVip(wv, call, done, h, 0, cleanup, hint), 2000);
                 }
             });
             wv.loadUrl(url);
         });
     }
 
-    private void pollContent(WebView wv, PluginCall call, boolean[] done, Handler h, int attempt, Runnable cleanup) {
+    private void pollVip(WebView wv, PluginCall call, boolean[] done, Handler h, int attempt, Runnable cleanup, android.widget.TextView hint) {
         if (done[0]) return;
         String js = "(function(){" +
             "var nt=document.querySelector('.noveltext');" +
             "if(!nt)return JSON.stringify({s:'no_el'});" +
-            "var t=nt.textContent||'';" +
-            "if(t.indexOf('\u52a0\u8f7d\u4e2d')>=0||t.indexOf('loading')>=0||t.length<50)return JSON.stringify({s:'loading',len:t.length});" +
-            "if(t.indexOf('\u52a0\u8f7d\u5931\u8d25')>=0)return JSON.stringify({s:'failed'});" +
-            "if((t.indexOf('\u8d2d\u4e70')>=0||t.indexOf('\u8ba2\u9605\u672c\u7ae0')>=0)&&t.length<400)return JSON.stringify({s:'unbought'});" +
+            "var t=(nt.textContent||'').replace(/\\s/g,'');" +
+            "if(t.length<30)return JSON.stringify({s:'short',l:t.length});" +
+            "if(t.indexOf('\\u52a0\\u8f7d\\u4e2d')>=0||t.indexOf('\\u52a0\\u8f7d\\u5931\\u8d25')>=0)return JSON.stringify({s:'loading'});" +
+            "if((t.indexOf('\\u8d2d\\u4e70')>=0||t.indexOf('\\u8ba2\\u9605')>=0)&&t.length<200)return JSON.stringify({s:'unbought'});" +
             "return JSON.stringify({s:'ok',html:document.documentElement.outerHTML});" +
             "})()";
         wv.evaluateJavascript(js, value -> {
@@ -382,24 +401,24 @@ public class AppToolsPlugin extends Plugin {
                     done[0] = true;
                     cleanup.run();
                     call.resolve(new JSObject().put("status", 200).put("unbought", true).put("data", ""));
-                } else if (status.equals("failed")) {
-                    done[0] = true;
-                    cleanup.run();
-                    call.reject("VIP \u6b63\u6587\u52a0\u8f7d\u5931\u8d25");
-                } else if (attempt < 30) {
-                    h.postDelayed(() -> pollContent(wv, call, done, h, attempt + 1, cleanup), 800);
+                } else if (attempt < 35) {
+                    final int a = attempt;
+                    new Handler(Looper.getMainLooper()).post(() -> {
+                        try { hint.setText("正在加载 VIP 正文…（" + (a+1) + "）"); } catch(Exception ignore){}
+                    });
+                    h.postDelayed(() -> pollVip(wv, call, done, h, attempt + 1, cleanup, hint), 800);
                 } else {
                     done[0] = true;
                     cleanup.run();
-                    call.reject("\u7b49\u4e86\u5f88\u4e45\uff0c\u9875\u9762\u91cc\u6ca1\u6709\u51fa\u73b0\u6b63\u6587");
+                    call.reject("等了很久，页面里没有出现正文");
                 }
             } catch (Exception e) {
-                if (attempt < 30) {
-                    h.postDelayed(() -> pollContent(wv, call, done, h, attempt + 1, cleanup), 800);
+                if (attempt < 35) {
+                    h.postDelayed(() -> pollVip(wv, call, done, h, attempt + 1, cleanup, hint), 800);
                 } else {
                     done[0] = true;
                     cleanup.run();
-                    call.reject("\u63d0\u53d6\u5931\u8d25\uff1a" + e.getMessage());
+                    call.reject("提取失败：" + e.getMessage());
                 }
             }
         });

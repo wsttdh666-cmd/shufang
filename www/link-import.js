@@ -4,6 +4,41 @@
   // 用 app 自己真实的浏览器标识（安卓 WebView），登录和下载统一用它，跟手机上正常浏览器一致。
   const UA = navigator.userAgent;
 
+  /* ---------------- 后台下载：通知栏进度 + 系统保活（原生前台服务） ---------------- */
+  const BG = {
+    on: false, ignoring: true,
+    call(m, o){ return Capacitor.nativePromise("AppTools", m, o || {}); },
+    start(title){
+      if (!NATIVE) return;
+      this.on = true;
+      this.call("bgPermission").catch(() => {});        // 安卓 13+ 弹一次通知权限，不等它，下载照常开始
+      this.call("bgStart", {title}).catch(() => {});
+      this.tip();
+    },
+    update(text, done, total){
+      if (!NATIVE || !this.on) return;
+      this.call("bgUpdate", {text: String(text || ""), done: done | 0, total: total | 0}).catch(() => {});
+    },
+    stop(text){
+      if (!NATIVE || !this.on) return;
+      this.on = false;
+      this.call("bgStop", {text: String(text || "")}).catch(() => {});
+    },
+    // 系统还没允许书房后台运行时，在下载卡片里提示一次
+    async tip(){
+      const el = $("bkBgTip"); if (!el) return;
+      let st; try { st = await this.call("bgBattery"); } catch(e){ return; }
+      let dismissed = false; try { dismissed = localStorage.getItem("bgTipDone") === "1"; } catch(e){}
+      this.ignoring = !!st.ignoring;
+      const vivo = /vivo|iqoo/.test(st.brand || "");
+      if (dismissed || (st.ignoring && !vivo)){ el.hidden = true; return; }
+      $("bkBgText").textContent =
+        (st.ignoring ? "" : "想切到别的应用时也接着下，需要允许书房在后台运行。") +
+        (vivo ? "vivo 手机还要在「设置 → 电池 → 后台耗电管理」里把书房设成「允许后台高耗电」。" : "");
+      el.hidden = false;
+    }
+  };
+
   /* ---------------- 联网 ---------------- */
   async function get(url, {redirect = true} = {}){
     let r;
@@ -703,6 +738,16 @@
   };
   $("bkPause").onclick = () => { if (run && run.engine){ run.stop = true; setStatus("bkRunMsg", "正在取消…"); return; } if (run){ run.stop = true; setStatus("bkRunMsg", "这一章下完就暂停…"); } };
   $("bkResume").onclick = () => { if (run && run.engine) return; loop(); };
+  if ($("bkBgBtn")) $("bkBgBtn").onclick = async () => {
+    try { localStorage.setItem("bgTipDone", "1"); } catch(e){}
+    $("bkBgTip").hidden = true;
+    // 还没放行就弹系统对话框；已放行（vivo 还差一步）就直接打开书房的应用详情页
+    try { await BG.call("bgBatteryAsk", {details: BG.ignoring}); } catch(e){}
+  };
+  if ($("bkBgNo")) $("bkBgNo").onclick = () => {
+    try { localStorage.setItem("bgTipDone", "1"); } catch(e){}
+    $("bkBgTip").hidden = true;
+  };
   $("bkBack").onclick = () => { if (run && run.active) return; $("bkRun").hidden = true; if (book) $("bkInfo").hidden = false; };
 
   /* ---------------- 番茄：引擎任务式下载 ---------------- */
@@ -726,6 +771,7 @@
     $("bkCount").textContent = "正在提交下载任务…";
     $("bkBar").style.width = "3%";
     setStatus("bkRunMsg", "正在让引擎开始下载…（首次会初始化，稍等）");
+    BG.start("《" + b.title + "》 番茄");
     try {
       const r = await engineJson("/api/jobs", {method:"POST", json: payload, timeout: 30000});
       if (r.status >= 400) throw new Error("建任务失败（HTTP " + r.status + "）");
@@ -736,6 +782,8 @@
       $("bkPause").hidden = true;
       setStatus("bkRunMsg", "下载失败：" + ((e && e.message) || e), "warn");
       $("bkBack").hidden = false;
+    } finally {
+      BG.stop(($("bkRunMsg").textContent || "").trim() || $("bkCount").textContent);
     }
   }
 
@@ -775,6 +823,7 @@
         const pct = total > 0 ? Math.min(99, Math.round(100 * saved / total)) : 12;
         $("bkBar").style.width = pct + "%";
         $("bkCount").textContent = total ? ("正文保存 " + saved + " / " + total) : ("状态：" + (st || "进行中"));
+        BG.update(total ? ("正文保存 " + saved + " / " + total) : "正在下载…", saved, total);
         if (st === "done" || st === "success" || st === "finished" || st === "completed"){
           run.partial = total > 0 && saved < total ? (total - saved) : 0;
           $("bkBar").style.width = "99%"; $("bkPause").hidden = true;
@@ -860,11 +909,13 @@
     let streak = 0;
     setStatus("bkRunMsg", "");
     draw();
+    BG.start("《" + r.book.title + "》");
     try {
       while (r.next < r.list.length){
         if (r.stop){ setStatus("bkRunMsg", "已暂停。点“继续”接着下。"); break; }
         const ch = r.list[r.next];
         ch.st = "busy"; draw();
+        BG.update("正在下载：" + ch.name + "（" + (r.next + 1) + " / " + r.list.length + "）", r.next, r.list.length);
         setStatus("bkRunMsg", "正在下载：" + ch.name + (ch.cmt ? "（连段评一起，会慢一点）" : ""));
         let tries = 0;
         for (;;){
@@ -888,8 +939,12 @@
     } finally {
       r.active = false;
     }
-    if (r.next >= r.list.length) await finish();
-    draw();
+    try {
+      if (r.next >= r.list.length) await finish();
+    } finally {
+      draw();
+      BG.stop(($("bkRunMsg").textContent || "").trim() || $("bkCount").textContent);
+    }
   }
 
   // 单章文本块（章节名 + 正文 + 作者有话说 + 段评）

@@ -1,6 +1,13 @@
 package app.shufang.hub;
 
+import android.Manifest;
 import android.app.DownloadManager;
+import android.os.PowerManager;
+import android.provider.Settings;
+import android.view.View;
+import com.getcapacitor.PermissionState;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
@@ -39,8 +46,110 @@ import android.webkit.WebViewClient;
 import android.webkit.WebChromeClient;
 
 // 网页那边够不着的几件事：装新版本、把文件存到手机里、把文件发给别的 App、用浏览器打开链接
-@CapacitorPlugin(name = "AppTools")
+@CapacitorPlugin(
+    name = "AppTools",
+    permissions = {
+        @Permission(strings = { Manifest.permission.POST_NOTIFICATIONS }, alias = "notifications")
+    }
+)
 public class AppToolsPlugin extends Plugin {
+
+    /* ---------------- 后台下载（前台服务保活） ---------------- */
+
+    // 通知权限（安卓 13+ 才需要申请）。被拒也不影响下载，只是通知栏看不到进度。
+    @PluginMethod
+    public void bgPermission(PluginCall call) {
+        if (Build.VERSION.SDK_INT < 33 || getPermissionState("notifications") == PermissionState.GRANTED) {
+            call.resolve(new JSObject().put("granted", true));
+            return;
+        }
+        requestPermissionForAlias("notifications", call, "bgPermissionCb");
+    }
+
+    @PermissionCallback
+    private void bgPermissionCb(PluginCall call) {
+        call.resolve(new JSObject().put("granted", getPermissionState("notifications") == PermissionState.GRANTED));
+    }
+
+    @PluginMethod
+    public void bgStart(PluginCall call) {
+        DownloadService.start(getContext(), call.getString("title", "书房"));
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void bgUpdate(PluginCall call) {
+        DownloadService.update(getContext(), call.getString("text", ""), call.getInt("done", 0), call.getInt("total", 0));
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void bgStop(PluginCall call) {
+        // 用户正看着 App 就不再弹「已完成」通知，只有在后台时才提醒
+        boolean fg = false;
+        try { fg = getActivity().getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED); } catch (Exception ignore) {}
+        DownloadService.stop(getContext(), fg ? "" : call.getString("text", ""));
+        // 下载结束时 App 若还在后台，把主网页的「可见」状态还给系统，别继续空转耗电
+        new Handler(Looper.getMainLooper()).post(() -> {
+            try {
+                View wv = getBridge().getWebView();
+                int real = getActivity().getWindow().getDecorView().getWindowVisibility();
+                if (real != View.VISIBLE) wv.dispatchWindowVisibilityChanged(real);
+            } catch (Exception ignore) {}
+        });
+        call.resolve();
+    }
+
+    // 系统有没有把书房列进「不限制后台 / 允许后台高耗电」
+    @PluginMethod
+    public void bgBattery(PluginCall call) {
+        boolean ok = true;
+        try {
+            PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+            ok = pm.isIgnoringBatteryOptimizations(getContext().getPackageName());
+        } catch (Exception ignore) {}
+        call.resolve(new JSObject().put("ignoring", ok).put("brand", Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.toLowerCase()));
+    }
+
+    // 弹系统对话框「允许书房在后台运行」；不行就打开书房的应用详情页让用户自己设
+    @PluginMethod
+    public void bgBatteryAsk(PluginCall call) {
+        String pkg = getContext().getPackageName();
+        if (!call.getBoolean("details", false)) {
+            try {
+                Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + pkg));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(i);
+                call.resolve(new JSObject().put("opened", "dialog"));
+                return;
+            } catch (Exception ignore) {}
+        }
+        try {
+            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + pkg));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(i);
+            call.resolve(new JSObject().put("opened", "details"));
+        } catch (Exception e) {
+            call.reject("打不开系统设置：" + e.getMessage());
+        }
+    }
+
+    // App 切到后台时：如果正在下载，告诉主网页「你还是可见的」，
+    // 免得网页内核把后台页面的计时器压慢、脚本变卡。下载结束后在 bgStop 里还原。
+    @Override
+    protected void handleOnStop() {
+        super.handleOnStop();
+        if (!DownloadService.running) return;
+        final Handler h = new Handler(Looper.getMainLooper());
+        Runnable keep = () -> {
+            try { if (DownloadService.running) getBridge().getWebView().dispatchWindowVisibilityChanged(View.VISIBLE); }
+            catch (Exception ignore) {}
+        };
+        // 系统的「不可见」通知是在 onStop 之后异步发的，多补几次确保盖过它
+        h.postDelayed(keep, 300);
+        h.postDelayed(keep, 1200);
+        h.postDelayed(keep, 3000);
+    }
     // 交给系统下载器：切到别的 App 也接着下，通知栏有进度；同一版本已在下或已下完就直接接上
     @PluginMethod
     public void install(PluginCall call) {
@@ -308,7 +417,14 @@ public class AppToolsPlugin extends Plugin {
             // 提示文字不再显示（进度在导书卡片里），保留一个未挂载的 TextView 供下面复用签名
             final android.widget.TextView hint = new android.widget.TextView(getContext());
 
-            final WebView wv = new WebView(getContext());
+            // App 切到后台时窗口会变「不可见」，网页内核随之把页面当后台页降速，
+            // 晋江的正文脚本可能跑不完。这个隐藏 WebView 只用来抓正文，始终按可见处理。
+            final WebView wv = new WebView(getContext()) {
+                @Override
+                protected void onWindowVisibilityChanged(int visibility) {
+                    super.onWindowVisibilityChanged(View.VISIBLE);
+                }
+            };
             wv.setFocusable(false);
             wv.setFocusableInTouchMode(false);
             wrap.addView(wv, new android.widget.FrameLayout.LayoutParams(

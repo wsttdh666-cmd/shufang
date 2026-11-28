@@ -11,12 +11,19 @@
      工具函数
      ============================================================ */
 
-  async function fetchPage(url) {
+  // 超时包装：原生请求有时会卡住不返回，到点就当连不上处理，避免整页干等
+  function withTimeout(promise, ms) {
+    let t;
+    const timer = new Promise((_, rej) => { t = setTimeout(() => rej(new Error("连不上：超时")), ms); });
+    return Promise.race([promise, timer]).finally(() => clearTimeout(t));
+  }
+
+  async function fetchPage(url, timeout = 9000) {
     let html;
     if (NATIVE) {
       let r;
       try {
-        r = await Capacitor.nativePromise("AppTools", "get", { url, redirect: true, ua: UA });
+        r = await withTimeout(Capacitor.nativePromise("AppTools", "get", { url, redirect: true, ua: UA }), timeout);
       } catch (e) {
         throw new Error("连不上：" + ((e && e.message) || e));
       }
@@ -24,7 +31,7 @@
         throw new Error("网站拦了请求（HTTP " + r.status + "），可能需要人机验证或稍后再试");
       if (r.status === 301 || r.status === 302) {
         const loc = r.location || "";
-        if (loc) return fetchPage(loc.startsWith("http") ? loc : new URL(loc, url).href);
+        if (loc) return fetchPage(loc.startsWith("http") ? loc : new URL(loc, url).href, timeout);
         throw new Error("网站跳转了但没给新地址（HTTP " + r.status + "）");
       }
       if (r.status !== 200) throw new Error("HTTP " + r.status);
@@ -33,7 +40,12 @@
         : new Uint8Array(0);
       html = decode(bytes);
     } else {
-      const res = await fetch(url);
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), timeout);
+      let res;
+      try { res = await fetch(url, { signal: ctrl.signal }); }
+      catch (e) { throw new Error("连不上：" + ((e && e.message) || e)); }
+      finally { clearTimeout(to); }
       if (!res.ok) throw new Error("HTTP " + res.status);
       html = await res.text();
     }
@@ -257,23 +269,23 @@
     const rule = RULES[src.type || "biquge"];
     if (!rule) return [];
     const base = src.base.replace(/\/+$/, "");
+    // 配置路径优先；域名活着但没搜到时，再试最多 2 个常见路径（最多 3 条，保证够快）
     const paths = [src.searchPath];
-    for (const p of FALLBACK_PATHS) if (!paths.includes(p)) paths.push(p);
+    for (const p of FALLBACK_PATHS) { if (paths.length >= 3) break; if (!paths.includes(p)) paths.push(p); }
 
-    let lastErr = null;
-    for (const path of paths) {
-      const url = base + path.replace("{kw}", encodeURIComponent(keyword));
+    for (let i = 0; i < paths.length; i++) {
+      const url = base + paths[i].replace("{kw}", encodeURIComponent(keyword));
+      let doc;
       try {
-        const { doc } = await fetchPage(url);
-        const results = rule.search(doc, src.base);
-        if (results.length) return results.map(r => Object.assign(r, { source: src }));
+        doc = (await fetchPage(url)).doc;
       } catch (e) {
-        lastErr = e;
-        // 域名本身连不上 / 被拦，就别再试其它路径了
-        if (/连不上|403|429|503/.test(String((e && e.message) || e))) throw e;
+        // 第一条路径就连不上/超时/被拦 → 域名多半是死的，立刻放弃，不再逐条干等
+        if (i === 0) throw e;
+        continue;   // 域名活着、只是这条路径不对，试下一条
       }
+      const results = rule.search(doc, src.base);
+      if (results.length) return results.map(r => Object.assign(r, { source: src }));
     }
-    if (lastErr) throw lastErr;
     return [];
   }
 

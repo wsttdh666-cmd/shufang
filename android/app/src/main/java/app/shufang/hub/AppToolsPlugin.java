@@ -309,6 +309,7 @@ public class AppToolsPlugin extends Plugin {
         final String ua = ua0 == null ? "" : ua0;
         new Thread(() -> {
             CookieManager cm = CookieManager.getInstance();
+            try { cm.setAcceptCookie(true); } catch (Throwable ignore) {}
             String url = start;
             try {
                 for (int hop = 0; hop < 6; hop++) {

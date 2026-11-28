@@ -421,10 +421,18 @@
       try { ({ doc, html } = await fetchPage(url, 12000, DESKTOP_UA)); }
       catch (e) { if (NATIVE) ({ doc, html } = await fetchRendered(url, DESKTOP_UA, 22000)); else throw e; }
     }
-    const results = parseSerp(doc, eng.host, keyword);
-    // 没结果且页面像验证码/限流页：给明确提示，别静默返回 0
-    if (!results.length && /punish|captcha|x5sec|validate|滑动|拖动|人机|verify/i.test(html || "")) {
-      throw new Error(eng.name + '被限流了（需要人机验证）。过几分钟再搜，或在密钥页换个引擎，或用上面的「粘贴网址」直接下。');
+    const isCaptcha = h => /punish|captcha|x5sec|validate|滑动|拖动|人机验证|verify/i.test(h || "");
+    let results = parseSerp(doc, eng.host, keyword);
+    // 被验证码拦了：用隐藏 WebView 渲染，执行反爬 JS，常能自动过验证
+    if (!results.length && isCaptcha(html) && NATIVE && !eng.render) {
+      try {
+        ({ doc, html } = await fetchRendered(url, DESKTOP_UA, 25000));
+        results = parseSerp(doc, eng.host, keyword);
+      } catch (e) { }
+    }
+    // 还是被拦且没结果：给明确提示，别静默返回 0
+    if (!results.length && isCaptcha(html)) {
+      throw new Error(eng.name + '被限流了（需要人机验证），这多半是短时间搜太多次。等几分钟再搜，或在密钥页换个引擎，或用上面的「粘贴网址」直接下。');
     }
     return results.map(r => ({
       title: r.title, url: r.url, author: "", latest: "",

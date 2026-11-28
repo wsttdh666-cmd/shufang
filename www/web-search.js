@@ -5,6 +5,11 @@
   "use strict";
 
   const UA = navigator.userAgent;
+  // 用桌面 UA 请求搜索引擎，拿稳定的桌面版结果页布局
+  const DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+  // 搜索引擎（"找书"入口）：默认 Bing，反爬宽松、结果好解析。可在 localStorage sf:engine 覆盖
+  let ENGINE = { name: "Bing", base: "https://cn.bing.com/search?q=", host: "bing.com" };
+  try { const e = JSON.parse(localStorage.getItem("sf:engine") || "null"); if (e && e.base) ENGINE = e; } catch (e) { }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   /* ============================================================
@@ -18,12 +23,12 @@
     return Promise.race([promise, timer]).finally(() => clearTimeout(t));
   }
 
-  async function fetchPage(url, timeout = 9000) {
+  async function fetchPage(url, timeout = 9000, ua = UA) {
     let html;
     if (NATIVE) {
       let r;
       try {
-        r = await withTimeout(Capacitor.nativePromise("AppTools", "get", { url, redirect: true, ua: UA }), timeout);
+        r = await withTimeout(Capacitor.nativePromise("AppTools", "get", { url, redirect: true, ua }), timeout);
       } catch (e) {
         throw new Error("连不上：" + ((e && e.message) || e));
       }
@@ -31,7 +36,7 @@
         throw new Error("网站拦了请求（HTTP " + r.status + "），可能需要人机验证或稍后再试");
       if (r.status === 301 || r.status === 302) {
         const loc = r.location || "";
-        if (loc) return fetchPage(loc.startsWith("http") ? loc : new URL(loc, url).href, timeout);
+        if (loc) return fetchPage(loc.startsWith("http") ? loc : new URL(loc, url).href, timeout, ua);
         throw new Error("网站跳转了但没给新地址（HTTP " + r.status + "）");
       }
       if (r.status !== 200) throw new Error("HTTP " + r.status);
@@ -49,6 +54,20 @@
       if (!res.ok) throw new Error("HTTP " + res.status);
       html = await res.text();
     }
+    return { html, doc: new DOMParser().parseFromString(html, "text/html") };
+  }
+
+  // 用隐藏 WebView 渲染页面（执行 JS、带 cookie），能过大多数反爬。只在 App 里可用。
+  async function fetchRendered(url, ua, timeout) {
+    if (!NATIVE) throw new Error("渲染模式只能在 App 里用");
+    let r;
+    try {
+      r = await Capacitor.nativePromise("AppTools", "getRendered", { url, ua: ua || UA, timeout: timeout || 20000 });
+    } catch (e) {
+      throw new Error("连不上：" + ((e && e.message) || e));
+    }
+    if (!r || !r.data) throw new Error("页面没返回内容");
+    const html = decode(Uint8Array.from(atob(r.data), c => c.charCodeAt(0)));
     return { html, doc: new DOMParser().parseFromString(html, "text/html") };
   }
 
@@ -265,6 +284,68 @@
     "/modules/article/search.php?searchkey={kw}", "/search.html?q={kw}", "/search/{kw}.html"
   ];
 
+  /* ---------- 搜索引擎"找书"：像浏览器那样搜，拿到各站的书页链接 ---------- */
+
+  // 解析搜索结果页，挑出指向小说站的外链（跳过搜索引擎自己和明显无关的大站）
+  const SERP_BAD = /(^|\.)(bing|microsoft|msn|live|baidu|google|sogou|so|haosou|360|zhihu|weibo|douban|bilibili|jd|taobao|tmall|qq|163|sina|csdn|xiaohongshu|toutiao|sm\.cn|uc\.cn|quark|apple|youtube|facebook)\.[a-z]/i;
+  function parseSerp(doc, engineHost) {
+    const out = [], seen = new Set();
+    let anchors = [...doc.querySelectorAll("#b_results li.b_algo h2 a")];
+    if (!anchors.length) anchors = [...doc.querySelectorAll("#b_results h2 a, .b_algo h2 a")];
+    if (!anchors.length) anchors = [...doc.querySelectorAll("li.b_algo a[href^='http']")];
+    if (!anchors.length) anchors = [...doc.querySelectorAll("h2 a[href^='http'], h3 a[href^='http']")];
+    for (const a of anchors) {
+      let href = a.getAttribute("href") || "";
+      if (!/^https?:\/\//i.test(href)) continue;
+      // Bing 的 /ck/a 跳转链：真实地址在 u 参数里（a1 + base64）
+      if (/bing\.com\/ck\/a/i.test(href)) {
+        try {
+          const raw = new URL(href).searchParams.get("u") || "";
+          if (/^a1/.test(raw)) {
+            const dec = atob(raw.slice(2).replace(/-/g, "+").replace(/_/g, "/"));
+            if (/^https?:\/\//i.test(dec)) href = dec;
+          }
+        } catch (e) { continue; }
+      }
+      let u; try { u = new URL(href); } catch (e) { continue; }
+      if (engineHost && u.hostname.indexOf(engineHost) >= 0) continue;
+      if (SERP_BAD.test(u.hostname)) continue;
+      const title = cleanStr(a.textContent);
+      if (!title || title.length > 60) continue;
+      if (seen.has(href)) continue;
+      seen.add(href);
+      out.push({ title, url: href, domain: u.hostname.replace(/^www\./, "") });
+    }
+    return out;
+  }
+
+  async function searchViaEngine(keyword) {
+    const url = ENGINE.base + encodeURIComponent(keyword + " 小说 全文阅读");
+    let doc;
+    try {
+      doc = (await fetchPage(url, 12000, DESKTOP_UA)).doc;         // 先用普通请求
+    } catch (e) {
+      if (!NATIVE) throw e;
+      doc = (await fetchRendered(url, DESKTOP_UA, 20000)).doc;     // 被拦就用隐藏 WebView 渲染
+    }
+    return parseSerp(doc, ENGINE.host).map(r => ({
+      title: r.title, url: r.url, author: "", latest: "",
+      source: { name: r.domain, base: new URL(r.url).origin, type: "biquge", engine: true }
+    }));
+  }
+
+  // 结果链接可能落在简介页（有"章节目录""开始阅读"按钮），找出进一层的目录链接
+  function findCatalogLink(doc, base) {
+    for (const a of doc.querySelectorAll("a[href]")) {
+      const t = (a.textContent || "").trim();
+      if (/章节目录|全部章节|查看目录|开始阅读|^目录$/.test(t)) {
+        const href = a.getAttribute("href");
+        if (href && href !== "#") { try { return new URL(href, base).href; } catch (e) { } }
+      }
+    }
+    return null;
+  }
+
   async function searchOne(src, keyword) {
     const rule = RULES[src.type || "biquge"];
     if (!rule) return [];
@@ -296,10 +377,21 @@
   async function loadWebBook(source, url) {
     const rule = RULES[source.type || "biquge"];
     if (!rule) throw new Error("不支持的源站类型");
-    const { doc } = await fetchPage(url);
-    const book = rule.book(doc, url);
-    if (!book.title) throw new Error("没有在页面上找到书名，可能这个站的结构变了");
-    if (!book.chapters.length) throw new Error("没有找到章节目录");
+    let { doc } = await fetchPage(url);
+    let book = rule.book(doc, url);
+    // 落在简介/文章页没读到目录时，顺着"章节目录""开始阅读"再进一层
+    if (book.title && !book.chapters.length) {
+      const link = findCatalogLink(doc, url);
+      if (link && link !== url) {
+        try {
+          const r2 = await fetchPage(link);
+          const b2 = rule.book(r2.doc, link);
+          if (b2.chapters.length) { book = b2; url = link; }
+        } catch (e) { }
+      }
+    }
+    if (!book.title) throw new Error("没在页面上找到书名，这个站的结构可能不一样。换结果里别的站试试。");
+    if (!book.chapters.length) throw new Error("找到了书，但没读到章节目录。换结果里别的站试试。");
     book.url = url;
     book.source = source;
     return book;
@@ -426,27 +518,33 @@
      ============================================================ */
 
   async function doWebSearchCore(kw, onProgress) {
-    const enabled = sources.filter(s => s.enabled);
-    if (!enabled.length) {
-      webErr.push('没有启用的源站。到"密钥"页面添加或启用源站。');
-      if (onProgress) onProgress();
-      return;
-    }
     const seen = new Set();
+    const add = (r) => {
+      const key = r.title + "|" + r.url;
+      if (seen.has(key)) return;
+      seen.add(key);
+      webResults.push(r);
+    };
+
+    // 主：像浏览器那样用搜索引擎找书（反爬宽松，能绕开小说站的 403）
+    try {
+      (await searchViaEngine(kw)).forEach(add);
+      if (onProgress) onProgress();
+    } catch (e) {
+      webErr.push(ENGINE.name + "：" + ((e && e.message) || String(e)));
+      if (onProgress) onProgress();
+    }
+    if (webResults.length) return;   // 引擎有结果就不再撞各站了
+
+    // 备用：直接搜各启用的源站（多半会被 403/超时，所以放后面）
+    const enabled = sources.filter(s => s.enabled);
+    if (!enabled.length) return;
     await Promise.all(enabled.map(async (s) => {
       let rs = [];
-      try {
-        rs = await searchOne(s, kw);
-      } catch (e) {
-        webErr.push(s.name + "：" + ((e && e.message) || String(e)));
-      }
-      for (const r of rs) {
-        const key = r.title + "|" + (r.author || "");
-        if (seen.has(key)) continue;
-        seen.add(key);
-        webResults.push(r);
-      }
-      if (onProgress) onProgress();      // 这个源站一回来就刷新结果
+      try { rs = await searchOne(s, kw); }
+      catch (e) { webErr.push(s.name + "：" + ((e && e.message) || String(e))); }
+      rs.forEach(add);
+      if (onProgress) onProgress();
     }));
   }
 

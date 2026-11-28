@@ -10,7 +10,7 @@
   // 搜索引擎（"找书"入口）：默认 Bing，反爬宽松、结果好解析。可在 localStorage sf:engine 覆盖
   // 搜索引擎预设（"找书"入口）。render:true 用隐藏 WebView 渲染（JS 重的引擎必须）
   const ENGINES = {
-    quark: { name: "夸克", base: "https://quark.sm.cn/s?q=", host: "sm.cn", render: false },
+    quark: { name: "夸克", base: "https://quark.sm.cn/s?q=", host: "sm.cn", render: false, warmup: "https://quark.sm.cn/" },
     bing: { name: "Bing", base: "https://cn.bing.com/search?q=", host: "bing.com", render: false, quote: true },
     so360: { name: "360", base: "https://www.so.com/s?q=", host: "so.com", render: false },
     sogou: { name: "搜狗", base: "https://www.sogou.com/web?query=", host: "sogou.com", render: true },
@@ -410,16 +410,23 @@
 
   async function searchViaEngine(keyword) {
     const eng = ENG();
+    // 先访问首页拿会话 cookie，否则夸克等会把无 cookie 的请求当机器人、返回验证码页（原生 get 共享 CookieManager，会自动带上）
+    if (eng.warmup) { try { await fetchPage(eng.warmup, 10000, DESKTOP_UA); } catch (e) { } }
     const q = eng.quote ? '"' + keyword + '" 小说' : keyword + " 小说";
     const url = eng.base + encodeURIComponent(q);
-    let doc;
+    let doc, html;
     if (eng.render && NATIVE) {
-      doc = (await fetchRendered(url, DESKTOP_UA, 22000)).doc;
+      ({ doc, html } = await fetchRendered(url, DESKTOP_UA, 22000));
     } else {
-      try { doc = (await fetchPage(url, 12000, DESKTOP_UA)).doc; }
-      catch (e) { if (NATIVE) doc = (await fetchRendered(url, DESKTOP_UA, 22000)).doc; else throw e; }
+      try { ({ doc, html } = await fetchPage(url, 12000, DESKTOP_UA)); }
+      catch (e) { if (NATIVE) ({ doc, html } = await fetchRendered(url, DESKTOP_UA, 22000)); else throw e; }
     }
-    return parseSerp(doc, eng.host, keyword).map(r => ({
+    const results = parseSerp(doc, eng.host, keyword);
+    // 没结果且页面像验证码/限流页：给明确提示，别静默返回 0
+    if (!results.length && /punish|captcha|x5sec|validate|滑动|拖动|人机|verify/i.test(html || "")) {
+      throw new Error(eng.name + '被限流了（需要人机验证）。过几分钟再搜，或在密钥页换个引擎，或用上面的「粘贴网址」直接下。');
+    }
+    return results.map(r => ({
       title: r.title, url: r.url, author: "", latest: "",
       source: { name: r.domain, base: new URL(r.url).origin, type: "biquge", engine: true }
     }));

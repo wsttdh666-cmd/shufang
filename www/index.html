@@ -721,7 +721,11 @@ function renderPan(){
     const d=el("div","item"), t=el("div","t"); t.append(el("span","tag",CLOUD[it.type]||it.type), document.createTextNode(it.note||"(没有说明)")); d.append(t);
     d.append(el("div","s",[it.date, it.password?"提取码 "+it.password:""].filter(Boolean).join(" · ")));
     const row=el("div","row");
-    if (/^https?:\/\//.test(it.url)){ const a=el("button","small primary","打开链接"); a.onclick=()=>openUrl(it.url); row.append(a); }
+    // 夸克/UC 网盘：一键转存→下载→入书架（登录一次，以后免登录）
+    if (NATIVE && window.panCanSave && window.panCanSave(it.url)){
+      const sv=el("button","small primary","转存入书架"); sv.onclick=()=>window.panSave(it, sv); row.append(sv);
+      const a=el("button","small","打开链接"); a.onclick=()=>openUrl(it.url); row.append(a);
+    } else if (/^https?:\/\//.test(it.url)){ const a=el("button","small primary","打开链接"); a.onclick=()=>openUrl(it.url); row.append(a); }
     const c=el("button","small", it.password?"复制提取码":"复制链接");
     c.onclick = async () => { try{ await navigator.clipboard.writeText(it.password||it.url); c.textContent="已复制"; }catch(e){ c.textContent=it.password||"复制失败"; } };
     row.append(c); d.append(row); box.append(d);
@@ -918,5 +922,6 @@ if (NATIVE && VER) checkUpdate().then(m => { if (LATEST > VER) $("updMsg").textC
 <script src="link-import.js"></script>
 <script src="reader.js"></script>
 <script src="web-search.js"></script>
+<script src="pan-drive.js"></script>
 </body>
 </html>

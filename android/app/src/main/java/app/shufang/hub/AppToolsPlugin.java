@@ -302,6 +302,10 @@ public class AppToolsPlugin extends Plugin {
     public void get(PluginCall call) {
         final String start = call.getString("url", "");
         final boolean follow = call.getBoolean("redirect", true);
+        final String method = call.getString("method", "GET");
+        final String body = call.getString("data", null);
+        final String contentType = call.getString("contentType", "application/json");
+        final String referer = call.getString("referer", "");
         String ua0 = call.getString("ua", "");
         if (ua0 == null || ua0.isEmpty()) {
             try { ua0 = android.webkit.WebSettings.getDefaultUserAgent(getContext()); } catch (Throwable ignore) {}
@@ -319,10 +323,21 @@ public class AppToolsPlugin extends Plugin {
                         c.setConnectTimeout(15000);
                         c.setReadTimeout(30000);
                         if (!ua.isEmpty()) c.setRequestProperty("User-Agent", ua);
-                        c.setRequestProperty("Accept", "text/html,application/xhtml+xml,*/*;q=0.8");
+                        c.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/json,*/*;q=0.8");
                         c.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9");
+                        if (referer != null && !referer.isEmpty()) c.setRequestProperty("Referer", referer);
                         String cookie = cm.getCookie(url);
                         if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
+                        // 只在第一跳发送请求方法和请求体（后续跳转按 GET 跟）
+                        if (hop == 0 && !"GET".equalsIgnoreCase(method)) {
+                            c.setRequestMethod(method.toUpperCase());
+                            if (body != null) {
+                                c.setRequestProperty("Content-Type", contentType);
+                                c.setDoOutput(true);
+                                byte[] bb = body.getBytes(StandardCharsets.UTF_8);
+                                try (OutputStream os = c.getOutputStream()) { os.write(bb); }
+                            }
+                        }
                         int code = c.getResponseCode();
                         Map<String, List<String>> fields = c.getHeaderFields();
                         for (Map.Entry<String, List<String>> h : fields.entrySet()) {

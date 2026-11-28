@@ -303,7 +303,7 @@ public class AppToolsPlugin extends Plugin {
         final String start = call.getString("url", "");
         final boolean follow = call.getBoolean("redirect", true);
         final String method = call.getString("method", "GET");
-        final String body = call.getString("data", null);
+        final String reqBody = call.getString("data", null);
         final String contentType = call.getString("contentType", "application/json");
         final String referer = call.getString("referer", "");
         String ua0 = call.getString("ua", "");
@@ -331,10 +331,10 @@ public class AppToolsPlugin extends Plugin {
                         // 只在第一跳发送请求方法和请求体（后续跳转按 GET 跟）
                         if (hop == 0 && !"GET".equalsIgnoreCase(method)) {
                             c.setRequestMethod(method.toUpperCase());
-                            if (body != null) {
+                            if (reqBody != null) {
                                 c.setRequestProperty("Content-Type", contentType);
                                 c.setDoOutput(true);
-                                byte[] bb = body.getBytes(StandardCharsets.UTF_8);
+                                byte[] bb = reqBody.getBytes(StandardCharsets.UTF_8);
                                 try (OutputStream os = c.getOutputStream()) { os.write(bb); }
                             }
                         }

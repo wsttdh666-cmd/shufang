@@ -109,56 +109,56 @@ label.inline select{width:auto;padding:6px 8px;font-size:14px}
 <h1 id="title">搜书</h1>
 
 <!-- ============ 搜书 ============ -->
-<div class=”view” id=”v-search”>
+<div class="view" id="v-search">
   <section>
-    <label for=”kw”>书名或作者<input type=”search” id=”kw” autocomplete=”off” enterkeyhint=”search”></label>
-    <div class=”seg” role=”radiogroup” aria-label=”搜索方式”>
-      <button role=”radio” data-search=”pan” aria-checked=”true”>网盘分享</button>
-      <button role=”radio” data-search=”web” aria-checked=”false”>在线站点</button>
+    <label for="kw">书名或作者<input type="search" id="kw" autocomplete="off" enterkeyhint="search"></label>
+    <div class="seg" role="radiogroup" aria-label="搜索方式">
+      <button role="radio" data-search="pan" aria-checked="true">网盘分享</button>
+      <button role="radio" data-search="web" aria-checked="false">在线站点</button>
     </div>
-    <div class=”row fill”><button class=”primary” id=”doSearch”>搜网盘分享</button></div>
-    <p class=”hint” id=”searchMsg”>在百度、夸克等网盘的公开分享里找别人存下来的书。只留下标题里带关键词、看起来是小说的结果。</p>
+    <div class="row fill"><button class="primary" id="doSearch">搜网盘分享</button></div>
+    <p class="hint" id="searchMsg">在百度、夸克等网盘的公开分享里找别人存下来的书。只留下标题里带关键词、看起来是小说的结果。</p>
   </section>
-  <section id=”panBox” hidden><h2>网盘分享<small id=”panCount”></small></h2>
-    <p class=”hint”>点开链接，在网盘 App 里转存并下载 txt，再回到”书架”导入。链接是别人分享的，失效很常见。</p>
-    <div class=”list” id=”panList”></div>
-    <div class=”row fill”><button id=”panMore” hidden></button></div></section>
+  <section id="panBox" hidden><h2>网盘分享<small id="panCount"></small></h2>
+    <p class="hint">点开链接，在网盘 App 里转存并下载 txt，再回到“书架”导入。链接是别人分享的，失效很常见。</p>
+    <div class="list" id="panList"></div>
+    <div class="row fill"><button id="panMore" hidden></button></div></section>
 
   <!-- 在线搜索结果 -->
-  <section id=”webBox” hidden>
-    <h2>搜索结果<small id=”webCount”></small></h2>
-    <p class=”hint”>点书名查看详情和目录。如果打不开，可能是站点地址变了，到”密钥”里更新。</p>
-    <div class=”list” id=”webList”></div>
+  <section id="webBox" hidden>
+    <h2>搜索结果<small id="webCount"></small></h2>
+    <p class="hint">点书名查看详情和目录。如果打不开，可能是站点地址变了，到“密钥”里更新。</p>
+    <div class="list" id="webList"></div>
   </section>
 
   <!-- 在线书籍详情 -->
-  <section id=”webInfo” hidden>
-    <h2 id=”webTitle”></h2>
-    <p class=”hint”><span class=”tag” id=”webSite”></span><span id=”webMeta”></span></p>
-    <details><summary>简介</summary><p class=”intro” id=”webIntro”></p></details>
-    <p class=”note” id=”webNotice” hidden></p>
-    <p id=”webAvail”></p>
-    <div class=”grid”>
-      <label for=”webFrom”>从第几章<input type=”number” id=”webFrom” min=”1” inputmode=”numeric”></label>
-      <label for=”webTo”>到第几章<input type=”number” id=”webTo” min=”1” inputmode=”numeric”></label>
+  <section id="webInfo" hidden>
+    <h2 id="webTitle"></h2>
+    <p class="hint"><span class="tag" id="webSite"></span><span id="webMeta"></span></p>
+    <details><summary>简介</summary><p class="intro" id="webIntro"></p></details>
+    <p class="note" id="webNotice" hidden></p>
+    <p id="webAvail"></p>
+    <div class="grid">
+      <label for="webFrom">从第几章<input type="number" id="webFrom" min="1" inputmode="numeric"></label>
+      <label for="webTo">到第几章<input type="number" id="webTo" min="1" inputmode="numeric"></label>
     </div>
-    <div class=”row”><button class=”small” id=”webPickRange”>只选这个范围</button><button class=”small” id=”webPickAll”>全选</button><button class=”small” id=”webPickNone”>全不选</button></div>
-    <p id=”webRange”></p>
-    <div class=”chlist pick” id=”webChList”></div>
-    <div class=”row”><button class=”small” id=”webPickAll2”>全选</button><button class=”small” id=”webPickNone2”>全不选</button></div>
-    <div class=”row fill”><button class=”primary” id=”webStart”>开始下载</button><button id=”webAddShelf”>加入书架</button><button id=”webBackList”>返回搜索结果</button></div>
+    <div class="row"><button class="small" id="webPickRange">只选这个范围</button><button class="small" id="webPickAll">全选</button><button class="small" id="webPickNone">全不选</button></div>
+    <p id="webRange"></p>
+    <div class="chlist pick" id="webChList"></div>
+    <div class="row"><button class="small" id="webPickAll2">全选</button><button class="small" id="webPickNone2">全不选</button></div>
+    <div class="row fill"><button class="primary" id="webStart">开始下载</button><button id="webAddShelf">加入书架</button><button id="webBackList">返回搜索结果</button></div>
   </section>
 
   <!-- 在线下载进度 -->
-  <section id=”webRun” hidden>
-    <h2 id=”webRunTitle”></h2>
-    <p id=”webRunCount”></p>
-    <div class=”bar”><i id=”webRunBar”></i></div>
-    <p class=”note” id=”webRunMsg” hidden></p>
-    <div class=”row fill”><button id=”webPause”>暂停</button><button class=”primary” id=”webResume” hidden>继续</button><button id=”webRunBack” hidden>返回选章节</button></div>
-    <div class=”chlist” id=”webRunList”></div>
-    <div id=”webDone” hidden>
-      <div class=”row fill”><button class=”primary” id=”webSaveTxt”>保存 TXT 到手机</button><button id=”webMakeCard”>拿去做角色卡</button><button id=”webToShelf”>去书架</button></div>
+  <section id="webRun" hidden>
+    <h2 id="webRunTitle"></h2>
+    <p id="webRunCount"></p>
+    <div class="bar"><i id="webRunBar"></i></div>
+    <p class="note" id="webRunMsg" hidden></p>
+    <div class="row fill"><button id="webPause">暂停</button><button class="primary" id="webResume" hidden>继续</button><button id="webRunBack" hidden>返回选章节</button></div>
+    <div class="chlist" id="webRunList"></div>
+    <div id="webDone" hidden>
+      <div class="row fill"><button class="primary" id="webSaveTxt">保存 TXT 到手机</button><button id="webMakeCard">拿去做角色卡</button><button id="webToShelf">去书架</button></div>
     </div>
   </section>
 </div>

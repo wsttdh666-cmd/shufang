@@ -71,6 +71,32 @@
     return { html, doc: new DOMParser().parseFromString(html, "text/html") };
   }
 
+  // 普通请求优先；被反爬拦了（403/超时/5xx）再用隐藏 WebView 渲染兜底
+  async function fetchSmart(url, timeout, ua) {
+    try {
+      return await fetchPage(url, timeout || 9000, ua || UA);
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      if (NATIVE && /HTTP 403|拦了请求|超时|连不上|HTTP 5/.test(msg)) {
+        return await fetchRendered(url, ua || UA, (timeout || 9000) + 9000);
+      }
+      throw e;
+    }
+  }
+
+  // 相关度：结果标题是否跟搜索词沾边（过滤掉把书名拆成单字搜出来的字典等噪音）
+  function relevant(title, kw) {
+    title = String(title || "");
+    const k = String(kw || "").replace(/\s+/g, "");
+    if (!k) return true;
+    if (title.indexOf(k) >= 0) return true;
+    if (k.length <= 3) return title.indexOf(k) >= 0;
+    const n = Math.min(4, k.length);               // 任一长度4的连续子串命中即算相关
+    for (let i = 0; i + n <= k.length; i++)
+      if (title.indexOf(k.slice(i, i + n)) >= 0) return true;
+    return false;
+  }
+
   function cleanStr(s) {
     return String(s || "")
       .replace(/[​‌‍⁠﻿]/g, "")
@@ -320,7 +346,8 @@
   }
 
   async function searchViaEngine(keyword) {
-    const url = ENGINE.base + encodeURIComponent(keyword + " 小说 全文阅读");
+    // 给书名加引号，强制整句匹配，别把「穿进赛博游戏」拆成单字「穿」
+    const url = ENGINE.base + encodeURIComponent('"' + keyword + '" 小说');
     let doc;
     try {
       doc = (await fetchPage(url, 12000, DESKTOP_UA)).doc;         // 先用普通请求
@@ -328,7 +355,10 @@
       if (!NATIVE) throw e;
       doc = (await fetchRendered(url, DESKTOP_UA, 20000)).doc;     // 被拦就用隐藏 WebView 渲染
     }
-    return parseSerp(doc, ENGINE.host).map(r => ({
+    // 相关度过滤：只留标题跟书名沾边的，字典等噪音直接丢掉。
+    // 若全被过滤掉（引擎跑偏了），返回空，让上层去走直连站点兜底。
+    const rs = parseSerp(doc, ENGINE.host).filter(r => relevant(r.title, keyword));
+    return rs.map(r => ({
       title: r.title, url: r.url, author: "", latest: "",
       source: { name: r.domain, base: new URL(r.url).origin, type: "biquge", engine: true }
     }));
@@ -358,7 +388,7 @@
       const url = base + paths[i].replace("{kw}", encodeURIComponent(keyword));
       let doc;
       try {
-        doc = (await fetchPage(url)).doc;
+        doc = (await fetchSmart(url)).doc;
       } catch (e) {
         // 第一条路径就连不上/超时/被拦 → 域名多半是死的，立刻放弃，不再逐条干等
         if (i === 0) throw e;
@@ -377,14 +407,14 @@
   async function loadWebBook(source, url) {
     const rule = RULES[source.type || "biquge"];
     if (!rule) throw new Error("不支持的源站类型");
-    let { doc } = await fetchPage(url);
+    let { doc } = await fetchSmart(url);
     let book = rule.book(doc, url);
     // 落在简介/文章页没读到目录时，顺着"章节目录""开始阅读"再进一层
     if (book.title && !book.chapters.length) {
       const link = findCatalogLink(doc, url);
       if (link && link !== url) {
         try {
-          const r2 = await fetchPage(link);
+          const r2 = await fetchSmart(link);
           const b2 = rule.book(r2.doc, link);
           if (b2.chapters.length) { book = b2; url = link; }
         } catch (e) { }
@@ -400,7 +430,7 @@
   async function downloadChapter(source, chUrl) {
     const rule = RULES[source.type || "biquge"];
     if (!rule) throw new Error("不支持的源站类型");
-    const { doc } = await fetchPage(chUrl);
+    const { doc } = await fetchSmart(chUrl);   // 章节被反爬拦了也用渲染兜底
     return rule.chapter(doc);
   }
 

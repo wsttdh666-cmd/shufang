@@ -681,13 +681,6 @@
      ============================================================ */
 
   async function openWebBook(result) {
-    // 晋江/番茄：App 已有成熟下载器，直接转去"导书"，别走通用解析
-    if (/(^|\.)(jjwxc\.(net|com)|fanqienovel\.com|changdunovel\.com)/i.test(result.url)) {
-      show("export");
-      $("bkInput").value = result.url;
-      $("bkRecognize").click();
-      return;
-    }
     $("webInfo").hidden = true;
     $("webRun").hidden = true;
     setWebMsg("webNotice", "正在加载书的信息和目录…");

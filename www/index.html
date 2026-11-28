@@ -549,6 +549,8 @@ async function bookList(){ const d=await db(); return (await reqP(d.transaction(
 async function bookAdd(name, text, id=Date.now().toString(36)+Math.random().toString(36).slice(2,6), extra={}){
   await txRW(t=>{ t.objectStore("meta").put(Object.assign({id, name, chars:text.length, mtime:Date.now()}, extra)); t.objectStore("text").put(text, id); }); return id; }
 async function bookText(id){ const d=await db(); return reqP(d.transaction("text").objectStore("text").get(id)); }
+async function bookChapGet(id){ try { return JSON.parse(await bookText(id+"::chap") || "null"); } catch(e){ return null; } }
+async function bookChapPut(id, map){ await txRW(t=>{ t.objectStore("text").put(JSON.stringify(map), id+"::chap"); }); }
 async function bookDel(id){ await txRW(t=>{ t.objectStore("meta").delete(id); t.objectStore("text").delete(id); }); }
 const fmtChars = n => n >= 10000 ? (n/10000).toFixed(1)+" 万字" : n+" 字";
 let BOOKS = [];

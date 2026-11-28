@@ -36,6 +36,23 @@
   }
   // 晋江字体还原：从渲染后的 HTML 拿到字体，把正文/作者话里的私用区码位换回真字。
   // 失败就原样返回（不改坏）。整本书会命中字体缓存。
+  // 从晋江正文容器里剔掉段评计数徽标和各种 UI，只留正文文字。
+  function stripJJBody(body){
+    if (!body) return body;
+    body.querySelectorAll(
+      "[id^=favorite], #report_box, .float_favorite, #mongolia_layer, h2, script, style, " +
+      "div[align=center], [style*='display:none' i], [style*='display: none' i], .readsmall, " +
+      "#note_danmu_wrapper, [class*=comment i], [id*=comment i], [class*=pinglun i], " +
+      "[class*=danmu i], [onclick*=comment i], [onclick*=pinglun i], [class*=jjplus i], sup"
+    ).forEach(n => n.remove());
+    // 段评计数常是段尾一个只含数字的小元素（span/a/i/em/b/font），剔掉
+    body.querySelectorAll("span, a, i, em, b, font").forEach(n => {
+      const t = (n.textContent || "").trim();
+      if (/^\d{1,5}$/.test(t) && !n.querySelector("*")) n.remove();
+    });
+    return body;
+  }
+
   async function jjRestore(html, text, note){
     try {
       if (!window.JJFont) return {text, note};
@@ -231,6 +248,7 @@
             }
           }
           if (!body) throw new Error("页面渲染后仍找不到正文");
+          stripJJBody(body);
           const text = textOf(body);
           if (!text) throw new Error("渲染后正文是空的");
           let note = "";
@@ -253,6 +271,7 @@
           body.querySelectorAll("[id^=favorite], #report_box, .float_favorite, #mongolia_layer, h2, script, style, div[align=center], [style*='display:none' i], [style*='display: none' i], .readsmall, #note_danmu_wrapper").forEach(n => n.remove());
         }
         if (!body) throw new Error("页面上没有正文");
+        stripJJBody(body);
         const text = textOf(body);
         if (!text) throw new Error("正文是空的");
         let note = "";
@@ -785,13 +804,21 @@
       }
       if (!text || !text.trim()) throw new Error("下载完成了，但没取到正文文件（引擎日志在 files/tomato/engine.log）");
       const partial = run.partial || 0;
-      const name = b.title + (partial ? "（缺 " + partial + " 章）" : "");
-      run.savedName = name;
-      run.savedId = await bookAdd(name, text, undefined, {platform:"番茄", url:b.url, author:b.author});
+      // 按章节合并进同一本书（去重）。解析不出章节就整本替换到同一条。
+      const parsed = splitChapters(text);
+      let res;
+      if (parsed.length){
+        res = await bookMergeChapters("fanqie:" + b.id, b.title, {platform:"番茄", url:b.url, author:b.author}, parsed);
+      } else {
+        const id = "src-fanqie_" + String(b.id);
+        await bookAdd(b.title, text, id, {srckey:"fanqie:" + b.id, platform:"番茄", url:b.url, author:b.author});
+        res = {id, name: b.title, added: 0};
+      }
+      run.savedName = res.name; run.savedId = res.id;
       run.active = false;
       $("bkBar").style.width = "100%";
-      $("bkCount").textContent = "已存进书架：" + name;
-      setStatus("bkRunMsg", "下载完成，已存进书架：" + name + (partial ? "（有 " + partial + " 章没下成）" : ""), "ok");
+      $("bkCount").textContent = "已存进书架：" + res.name;
+      setStatus("bkRunMsg", "下载完成，已存进书架：" + res.name + (partial ? "（有 " + partial + " 章没下成）" : ""), "ok");
       $("bkDone").hidden = false; $("bkBack").hidden = false;
       try { await loadBooks(); } catch(e){}
     } catch(e){
@@ -853,6 +880,47 @@
     draw();
   }
 
+  // 单章文本块（章节名 + 正文 + 作者有话说 + 段评）
+  function chapterBlock(c){
+    if (c.st === "nobuy") return c.name + "\n\n（这一章没买，晋江网页不给正文）";
+    const cm = c.comments, say = cm && cm.map && cm.map["-2"];
+    return c.name + "\n\n" + withComments(c.text, cm)
+      + (c.note ? "\n\n作者有话说：\n" + c.note + (say ? "\n" + formatComments(say) : "") : "")
+      + (cm && cm.error ? "\n\n（这一章的段评没取到：" + cm.error + "）" : "");
+  }
+
+  // 把一整段 txt 按章节标题切成块（番茄引擎给的是整本，用这个拆开好去重合并）
+  function splitChapters(text){
+    const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+    const HEAD = /^\s*(第\s*[0-9零〇一二两三四五六七八九十百千万]+\s*[章节回卷集部篇话].{0,40}|序章?|楔子|引子|番外.{0,30})\s*$/;
+    const out = []; let cur = null;
+    for (const ln of lines){
+      const s = ln.trim();
+      if (s && s.length <= 45 && HEAD.test(s)){ cur = {title: s, lines: []}; out.push(cur); }
+      else if (cur) cur.lines.push(ln);
+    }
+    return out.map((c, idx) => {
+      const m = c.title.match(/第\s*([0-9]+)\s*[章节回]/);
+      return {num: m ? +m[1] : 1000000 + idx, key: c.title, block: c.title + "\n\n" + c.lines.join("\n").replace(/^\n+|\n+$/g, "") };
+    });
+  }
+
+  // 按章节去重合并进书架：同一本书（srcKey 相同）只占一条，章节按序号排，重复章只留先有的。
+  async function bookMergeChapters(srcKey, title, extra, chapters){
+    let existing = null;
+    try { existing = (await bookList()).find(b => b.srckey === srcKey); } catch(e){}
+    const id = existing ? existing.id : ("src-" + String(srcKey).replace(/[^0-9a-zA-Z]+/g, "_"));
+    const map = (existing && await bookChapGet(id)) || {};
+    let added = 0;
+    for (const c of chapters){ if (c && c.key && !(c.key in map)){ map[c.key] = {num: c.num, block: c.block}; added++; } }
+    const arr = Object.values(map).sort((a, b) => a.num - b.num);
+    const text = arr.map(x => x.block).join("\n\n\n") + "\n";
+    const name = title + "（" + arr.length + " 章）";
+    await bookAdd(name, text, id, Object.assign({srckey: srcKey}, extra));
+    await bookChapPut(id, map);
+    return {id, name, added, total: arr.length};
+  }
+
   function composeText(r){
     const b = r.book, parts = [b.title, "作者：" + (b.author || "未知") + "　来源：" + b.platform + "　" + b.url];
     if (b.intro) parts.push("简介：\n" + b.intro);
@@ -876,21 +944,23 @@
     return parts.join("\n\n\n") + "\n";
   }
   async function finish(){
-    const r = run, ok = r.list.filter(c => c.st === "ok").length;
+    const r = run, okList = r.list.filter(c => c.st === "ok"), ok = okList.length;
     if (!ok && r.list.some(c => c.st === "nobuy")){ setStatus("bkRunMsg", "选的章节都没买，没有可存的正文。", "warn"); return; }
     if (!ok){ setStatus("bkRunMsg", "一章都没下成，没有存进书架。", "warn"); return; }
-    const name = r.book.title + (ok < r.book.chapters.length ? "（" + ok + " 章）" : "");
-    r.savedId = await bookAdd(name, composeText(r), undefined, {platform:r.book.platform, url:r.book.url, author:r.book.author});
-    r.savedName = name;
-    setStatus("bkRunMsg", "下载完成，已存进书架：" + name, "ok");
+    const chapters = okList.map(c => ({num: c.num, key: c.name, block: chapterBlock(c)}));
+    const srcKey = (r.book.key || "book") + ":" + r.book.id;
+    const res = await bookMergeChapters(srcKey, r.book.title, {platform: r.book.platform, url: r.book.url, author: r.book.author}, chapters);
+    r.savedId = res.id; r.savedName = res.name;
+    const dup = ok - res.added;
+    setStatus("bkRunMsg", "下载完成，已存进书架：" + res.name + (dup > 0 ? "（其中 " + dup + " 章之前下过，已合并、没重复）" : ""), "ok");
     $("bkDone").hidden = false;
     try { await loadBooks(); } catch(e){}
   }
   $("bkSaveTxt").onclick = async () => {
     if (!run || !run.savedId) return;
     try {
-      // 引擎模式没有逐章 list，直接取已存进书架的正文
-      const text = run.engine ? await bookText(run.savedId) : composeText(run);
+      // 直接取已存进书架、已合并好的正文
+      const text = await bookText(run.savedId);
       setStatus("bkRunMsg", await fileOut("save", safe(run.savedName) + ".txt", text), "ok");
     } catch(e){ setStatus("bkRunMsg", "没存成：" + ((e && e.message) || e), "warn"); }
   };

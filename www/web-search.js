@@ -8,8 +8,16 @@
   // 用桌面 UA 请求搜索引擎，拿稳定的桌面版结果页布局
   const DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
   // 搜索引擎（"找书"入口）：默认 Bing，反爬宽松、结果好解析。可在 localStorage sf:engine 覆盖
-  let ENGINE = { name: "Bing", base: "https://cn.bing.com/search?q=", host: "bing.com" };
-  try { const e = JSON.parse(localStorage.getItem("sf:engine") || "null"); if (e && e.base) ENGINE = e; } catch (e) { }
+  // 搜索引擎预设（"找书"入口）。render:true 用隐藏 WebView 渲染（JS 重的引擎必须）
+  const ENGINES = {
+    quark: { name: "夸克", base: "https://quark.sm.cn/s?q=", host: "sm.cn", render: false },
+    bing: { name: "Bing", base: "https://cn.bing.com/search?q=", host: "bing.com", render: false, quote: true },
+    so360: { name: "360", base: "https://www.so.com/s?q=", host: "so.com", render: false },
+    sogou: { name: "搜狗", base: "https://www.sogou.com/web?query=", host: "sogou.com", render: true },
+  };
+  let engineId = "quark";
+  try { const id = localStorage.getItem("sf:engineId"); if (id && ENGINES[id]) engineId = id; } catch (e) { }
+  function ENG() { return ENGINES[engineId] || ENGINES.quark; }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   /* ============================================================
@@ -205,8 +213,8 @@
 
       // 目录
       const chapters = [];
-      let links = doc.querySelectorAll("#list dd a, .listmain dd a, #chapterList a, .chapter-list a, .list-chapter a, #list-chapterAll dd a");
-      if (!links.length) links = doc.querySelectorAll("#list a, .listmain a, .zjlist a, #chapterlist a");
+      let links = doc.querySelectorAll("#list dd a, .listmain dd a, #chapterList a, .chapter-list a, .list-chapter a, #list-chapterAll dd a, .catalog a, .mulu a, .chapterlist a, .section-list a, .book_list a, .booklist a");
+      if (!links.length) links = doc.querySelectorAll("#list a, .listmain a, .zjlist a, #chapterlist a, .catalog a, dd a");
       // 有些站把 dt（卷名）和 dd（章节）混在一起，dt 里的 a 通常不是章节
       let num = 0;
       for (const a of links) {
@@ -312,53 +320,91 @@
 
   /* ---------- 搜索引擎"找书"：像浏览器那样搜，拿到各站的书页链接 ---------- */
 
-  // 解析搜索结果页，挑出指向小说站的外链（跳过搜索引擎自己和明显无关的大站）
-  const SERP_BAD = /(^|\.)(bing|microsoft|msn|live|baidu|google|sogou|so|haosou|360|zhihu|weibo|douban|bilibili|jd|taobao|tmall|qq|163|sina|csdn|xiaohongshu|toutiao|sm\.cn|uc\.cn|quark|apple|youtube|facebook)\.[a-z]/i;
-  function parseSerp(doc, engineHost) {
-    const out = [], seen = new Set();
-    let anchors = [...doc.querySelectorAll("#b_results li.b_algo h2 a")];
-    if (!anchors.length) anchors = [...doc.querySelectorAll("#b_results h2 a, .b_algo h2 a")];
-    if (!anchors.length) anchors = [...doc.querySelectorAll("li.b_algo a[href^='http']")];
-    if (!anchors.length) anchors = [...doc.querySelectorAll("h2 a[href^='http'], h3 a[href^='http']")];
-    for (const a of anchors) {
-      let href = a.getAttribute("href") || "";
-      if (!/^https?:\/\//i.test(href)) continue;
-      // Bing 的 /ck/a 跳转链：真实地址在 u 参数里（a1 + base64）
-      if (/bing\.com\/ck\/a/i.test(href)) {
-        try {
-          const raw = new URL(href).searchParams.get("u") || "";
-          if (/^a1/.test(raw)) {
-            const dec = atob(raw.slice(2).replace(/-/g, "+").replace(/_/g, "/"));
-            if (/^https?:\/\//i.test(dec)) href = dec;
-          }
-        } catch (e) { continue; }
+  // 跳过搜索引擎自己和明显无关的大站（按域名后缀匹配，含 page.sm.cn、ubook.reader.qq.com 这类子域）
+  const BAD_DOMAINS = ["bing.com", "microsoft.com", "msn.com", "live.com", "baidu.com", "google.com", "google.com.hk", "sogou.com", "so.com", "haosou.com", "360.cn", "zhihu.com", "weibo.com", "douban.com", "bilibili.com", "jd.com", "taobao.com", "tmall.com", "qq.com", "163.com", "sina.com.cn", "csdn.net", "xiaohongshu.com", "toutiao.com", "sm.cn", "uc.cn", "quark.cn", "apple.com", "youtube.com", "facebook.com", "zimgs.cn", "alicdn.com", "w3.org", "gov.cn"];
+  function isBadHost(host) {
+    host = (host || "").toLowerCase();
+    return BAD_DOMAINS.some(d => host === d || host.endsWith("." + d));
+  }
+  const BTN_WORDS = /^(开始阅读|立即阅读|免费阅读|在线阅读|点击阅读|章节目录|全部章节|最新章节|查看目录|目录|阅读|下载|txt下载|更多|详情)$/;
+
+  // 各搜索引擎的跳转链：真实地址藏在参数里，解出来（夸克结果多是直链，这里主要给 Bing/搜狗用）
+  function resolveRedirect(href) {
+    if (!href) return href;
+    if (/bing\.com\/ck\/a/i.test(href)) {
+      try {
+        const raw = new URL(href).searchParams.get("u") || "";
+        if (/^a1/.test(raw)) { const d = atob(raw.slice(2).replace(/-/g, "+").replace(/_/g, "/")); if (/^https?:\/\//i.test(d)) return d; }
+      } catch (e) { }
+    }
+    try {
+      const u = new URL(href, "https://_/");
+      for (const k of ["url", "u", "target", "to", "link", "dest"]) {
+        let v = u.searchParams.get(k);
+        if (v) { try { v = decodeURIComponent(v); } catch (e) { } if (/^https?:\/\//i.test(v)) return v; }
       }
+    } catch (e) { }
+    return href;
+  }
+
+  // 清洗结果标题：优先取《…》，否则砍掉"最新章节…"、结尾的 _www.域名 / 书城名
+  function cleanSerpTitle(t) {
+    t = cleanStr(t);
+    const m = t.match(/《([^》]{2,40})》/);
+    if (m) return m[1];
+    t = t.split(/最新章节|免费阅读|全文阅读|在线阅读|，|,/)[0];
+    t = t.replace(/[_\-\s]+(www\.|m\.|wap\.)?[a-z0-9.-]+\.(com|cc|net|la|cn|org|xyz|me)\s*$/i, "");
+    t = t.replace(/[_\-\s]+(晋江文学城|格格党|[0-9A-Za-z一-龥]{1,6}书屋)\s*$/, "");
+    return t.replace(/^[\s_\-|·]+|[\s_\-|·]+$/g, "").slice(0, 40);
+  }
+
+  // 书的分组键：域名 + 路径里第一个长数字段（书号），把同一本书的多个链接归并
+  function bookKey(host, path) {
+    const ids = (path || "").match(/\d{3,}/);
+    return host.replace(/^www\./, "") + "|" + (ids ? ids[0] : (path || ""));
+  }
+
+  // 解析搜索结果页：按书分组，每本取一个干净标题 + 最短的那个链接（通常是目录页）
+  // 逻辑已用夸克真实结果页在手机上验证通过
+  function parseSerp(doc, engineHost, keyword) {
+    const groups = new Map();
+    for (const a of doc.querySelectorAll("a[href]")) {
+      let href = resolveRedirect(a.getAttribute("href") || "");
+      if (!/^https?:\/\//i.test(href)) continue;
       let u; try { u = new URL(href); } catch (e) { continue; }
-      if (engineHost && u.hostname.indexOf(engineHost) >= 0) continue;
-      if (SERP_BAD.test(u.hostname)) continue;
-      const title = cleanStr(a.textContent);
-      if (!title || title.length > 60) continue;
-      if (seen.has(href)) continue;
-      seen.add(href);
-      out.push({ title, url: href, domain: u.hostname.replace(/^www\./, "") });
+      const host = u.hostname;
+      if (engineHost && host.indexOf(engineHost) >= 0) continue;
+      if (isBadHost(host)) continue;
+      const title = cleanSerpTitle(a.textContent);
+      const key = bookKey(host, u.pathname);
+      let g = groups.get(key);
+      if (!g) { g = { title: "", urls: [], host: host.replace(/^www\./, "") }; groups.set(key, g); }
+      if (g.urls.indexOf(href) < 0) g.urls.push(href);
+      // 只把"像书名、且跟搜索词沾边"的标题当作本组标题，字典/按钮/不相关的忽略
+      if (title && !BTN_WORDS.test(title) && title.length >= 4 && relevant(title, keyword) && title.length > g.title.length)
+        g.title = title;
+    }
+    const out = [];
+    for (const g of groups.values()) {
+      if (!g.title) continue;
+      const url = g.urls.slice().sort((a, b) => a.length - b.length)[0];
+      out.push({ title: g.title, url, domain: g.host });
     }
     return out;
   }
 
   async function searchViaEngine(keyword) {
-    // 给书名加引号，强制整句匹配，别把「穿进赛博游戏」拆成单字「穿」
-    const url = ENGINE.base + encodeURIComponent('"' + keyword + '" 小说');
+    const eng = ENG();
+    const q = eng.quote ? '"' + keyword + '" 小说' : keyword + " 小说";
+    const url = eng.base + encodeURIComponent(q);
     let doc;
-    try {
-      doc = (await fetchPage(url, 12000, DESKTOP_UA)).doc;         // 先用普通请求
-    } catch (e) {
-      if (!NATIVE) throw e;
-      doc = (await fetchRendered(url, DESKTOP_UA, 20000)).doc;     // 被拦就用隐藏 WebView 渲染
+    if (eng.render && NATIVE) {
+      doc = (await fetchRendered(url, DESKTOP_UA, 22000)).doc;
+    } else {
+      try { doc = (await fetchPage(url, 12000, DESKTOP_UA)).doc; }
+      catch (e) { if (NATIVE) doc = (await fetchRendered(url, DESKTOP_UA, 22000)).doc; else throw e; }
     }
-    // 相关度过滤：只留标题跟书名沾边的，字典等噪音直接丢掉。
-    // 若全被过滤掉（引擎跑偏了），返回空，让上层去走直连站点兜底。
-    const rs = parseSerp(doc, ENGINE.host).filter(r => relevant(r.title, keyword));
-    return rs.map(r => ({
+    return parseSerp(doc, eng.host, keyword).map(r => ({
       title: r.title, url: r.url, author: "", latest: "",
       source: { name: r.domain, base: new URL(r.url).origin, type: "biquge", engine: true }
     }));
@@ -502,6 +548,29 @@
   $("doSearch").onclick = doCombinedSearch;
   $("kw").onkeydown = e => { if (e.key === "Enter") doCombinedSearch(); };
 
+  // 粘贴网址直接打开（最稳：绕开搜索引擎，直接抓这个网址的书）
+  async function openPastedUrl() {
+    let raw = $("webUrl").value.trim();
+    if (!raw) return;
+    if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
+    let origin, host;
+    try { const u = new URL(raw); origin = u.origin; host = u.hostname.replace(/^www\./, ""); }
+    catch (e) { setWebMsg("webNotice", "网址不对，复制完整的书籍链接再试。", "warn"); $("webNotice").hidden = false; return; }
+    searchDone = true;
+    openWebBook({ title: host, url: raw, source: { name: host, base: origin, type: "biquge", engine: true } });
+  }
+  if ($("webOpenUrl")) $("webOpenUrl").onclick = openPastedUrl;
+  if ($("webUrl")) $("webUrl").onkeydown = e => { if (e.key === "Enter") openPastedUrl(); };
+
+  // 搜索引擎选择（密钥页）
+  if ($("engSel")) {
+    $("engSel").value = engineId;
+    $("engSel").onchange = () => {
+      engineId = $("engSel").value;
+      try { localStorage.setItem("sf:engineId", engineId); } catch (e) { }
+    };
+  }
+
   // 恢复保存的筛选高亮
   applyFilter();
 
@@ -561,7 +630,7 @@
       (await searchViaEngine(kw)).forEach(add);
       if (onProgress) onProgress();
     } catch (e) {
-      webErr.push(ENGINE.name + "：" + ((e && e.message) || String(e)));
+      webErr.push(ENG().name + "：" + ((e && e.message) || String(e)));
       if (onProgress) onProgress();
     }
     if (webResults.length) return;   // 引擎有结果就不再撞各站了
@@ -612,6 +681,13 @@
      ============================================================ */
 
   async function openWebBook(result) {
+    // 晋江/番茄：App 已有成熟下载器，直接转去"导书"，别走通用解析
+    if (/(^|\.)(jjwxc\.(net|com)|fanqienovel\.com|changdunovel\.com)/i.test(result.url)) {
+      show("export");
+      $("bkInput").value = result.url;
+      $("bkRecognize").click();
+      return;
+    }
     $("webInfo").hidden = true;
     $("webRun").hidden = true;
     setWebMsg("webNotice", "正在加载书的信息和目录…");

@@ -119,6 +119,10 @@ label.inline select{width:auto;padding:6px 8px;font-size:14px}
     </div>
     <div class="row fill"><button class="primary" id="doSearch">搜索</button></div>
     <p class="hint" id="searchMsg">在百度、夸克等网盘的公开分享里找别人存下来的书。只留下标题里带关键词、看起来是小说的结果。</p>
+    <details id="webUrlBox"><summary>或者，粘贴小说网址直接下载</summary>
+      <p class="hint" style="margin-top:8px">在夸克/浏览器里搜到书后，复制那本书的网址粘到这里，直接抓目录下载（最稳）。</p>
+      <div class="row fill"><input type="text" id="webUrl" placeholder="https://……书的网址" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go"><button class="primary" id="webOpenUrl">打开</button></div>
+    </details>
   </section>
   <section id="panBox" hidden><h2>网盘分享<small id="panCount"></small></h2>
     <p class="hint">点开链接，在网盘 App 里转存并下载 txt，再回到“书架”导入。链接是别人分享的，失效很常见。</p>
@@ -286,6 +290,16 @@ label.inline select{width:auto;padding:6px 8px;font-size:14px}
     <label for="k_pansou">服务地址<input type="text" id="k_pansou" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
     <label for="k_pansou_token">口令（服务要求登录时才填）<input type="password" id="k_pansou_token" autocomplete="off"></label>
     <div class="row"><button class="small" id="saveKeys">保存搜索设置</button><span class="hint" id="keysMsg"></span></div>
+  </section>
+  <section>
+    <h2>在线搜书引擎</h2>
+    <p class="hint">在线搜书先用这个引擎"找书"，再去你选中的站点抓目录。哪个好使选哪个。</p>
+    <label for="engSel" class="inline">搜索引擎<select id="engSel">
+      <option value="quark">夸克</option>
+      <option value="bing">Bing</option>
+      <option value="so360">360</option>
+      <option value="sogou">搜狗</option>
+    </select></label>
   </section>
   <section>
     <h2>在线搜书源站</h2>

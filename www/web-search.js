@@ -289,29 +289,6 @@
     return [];
   }
 
-  async function searchAll(keyword) {
-    const enabled = sources.filter(s => s.enabled);
-    if (!enabled.length) return { results: [], errors: ['没有启用的源站。到"密钥"页面添加或启用源站。'] };
-    const errors = [];
-    const promises = enabled.map(s =>
-      searchOne(s, keyword).catch(e => {
-        errors.push(s.name + "：" + ((e && e.message) || String(e)));
-        return [];
-      })
-    );
-    const all = (await Promise.all(promises)).flat();
-    // 去重：相同标题+作者只留第一个
-    const seen = new Set();
-    const unique = [];
-    for (const r of all) {
-      const key = r.title + "|" + (r.author || "");
-      if (seen.has(key)) continue;
-      seen.add(key);
-      unique.push(r);
-    }
-    return { results: unique, errors };
-  }
-
   /* ============================================================
      书籍详情与章节下载
      ============================================================ */
@@ -362,6 +339,7 @@
   let filter = "all";                 // all | pan | web
   try { filter = localStorage.getItem("sf:filter") || "all"; } catch (e) { }
   let searchDone = false;
+  let searching = false;              // 在线搜索进行中（边搜边出）
   let webErr = [];
 
   function panCount() {
@@ -385,7 +363,7 @@
       $("webInfo").hidden = true;
       $("webRun").hidden = true;
     } else if (!inWebDrill) {
-      $("webBox").hidden = !(webResults.length > 0 || webErr.length > 0);
+      $("webBox").hidden = !(searching || webResults.length > 0 || webErr.length > 0);
     }
   }
 
@@ -410,45 +388,66 @@
     if (!kw) { $("searchMsg").textContent = "先输入书名或作者。"; return; }
 
     $("doSearch").disabled = true;
-    $("searchMsg").textContent = "搜索中，可能要等十几秒…";
+    $("searchMsg").textContent = "搜索中…";
     $("webInfo").hidden = true;
     $("webRun").hidden = true;
+
+    // 结果区先显示出来，边搜边出：哪个源站先回来就先显示哪个
+    searchDone = true;
+    searching = true;
+    webResults = [];
+    webErr = [];
+    renderWebResults();
+    applyFilter();
+
+    const onProgress = () => { renderWebResults(); applyFilter(); };
 
     // 网盘搜索：index.html 的 doSearch 会自己把结果渲染到 panBox
     const panP = Promise.resolve()
       .then(() => _origPanSearch && _origPanSearch())
       .catch(() => { });
-    // 在线站点搜索
-    const webP = doWebSearchCore(kw).catch(e => {
-      webErr = [String((e && e.message) || e)];
-      webResults = [];
-      renderWebResults();
+    // 在线站点搜索（渐进式）
+    const webP = doWebSearchCore(kw, onProgress).catch(e => {
+      webErr.push(String((e && e.message) || e));
+      onProgress();
     });
 
     await Promise.all([panP, webP]);
 
-    searchDone = true;
+    searching = false;
     $("doSearch").disabled = false;
     $("searchMsg").textContent = "网盘 " + panCount() + " 条 · 在线站点 " + webResults.length + " 个。用上面的标签切换查看。";
+    renderWebResults();
     applyFilter();
   }
 
   /* ============================================================
-     在线站点搜索
+     在线站点搜索（每个源站一返回就刷新，不等最慢的）
      ============================================================ */
 
-  async function doWebSearchCore(kw) {
-    webErr = [];
-    webResults = [];
-    if (!sources.some(s => s.enabled)) {
-      webErr = ['没有启用的源站。到"密钥"页面添加或启用源站。'];
-      renderWebResults();
+  async function doWebSearchCore(kw, onProgress) {
+    const enabled = sources.filter(s => s.enabled);
+    if (!enabled.length) {
+      webErr.push('没有启用的源站。到"密钥"页面添加或启用源站。');
+      if (onProgress) onProgress();
       return;
     }
-    const { results, errors } = await searchAll(kw);
-    webResults = results;
-    webErr = errors || [];
-    renderWebResults();
+    const seen = new Set();
+    await Promise.all(enabled.map(async (s) => {
+      let rs = [];
+      try {
+        rs = await searchOne(s, kw);
+      } catch (e) {
+        webErr.push(s.name + "：" + ((e && e.message) || String(e)));
+      }
+      for (const r of rs) {
+        const key = r.title + "|" + (r.author || "");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        webResults.push(r);
+      }
+      if (onProgress) onProgress();      // 这个源站一回来就刷新结果
+    }));
   }
 
   function renderWebResults() {
@@ -457,9 +456,10 @@
     $("webCount").textContent = webResults.length + " 个";
 
     if (!webResults.length) {
-      box.append(el("p", "hint", webErr.length
-        ? "没搜到。" + webErr.join("；")
-        : '没搜到结果。换个关键词，或到"密钥"里检查、添加源站。'));
+      box.append(el("p", "hint",
+        searching ? "搜索中…" + (webErr.length ? "（" + webErr.join("；") + "）" : "")
+          : webErr.length ? "没搜到。" + webErr.join("；")
+            : '没搜到结果。换个关键词，或到"密钥"里检查、添加源站。'));
     }
 
     for (const r of webResults) {

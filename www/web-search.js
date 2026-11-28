@@ -213,21 +213,35 @@
 
       // 目录
       const chapters = [];
-      let links = doc.querySelectorAll("#list dd a, .listmain dd a, #chapterList a, .chapter-list a, .list-chapter a, #list-chapterAll dd a, .catalog a, .mulu a, .chapterlist a, .section-list a, .book_list a, .booklist a");
+      const seenUrl = new Set();
+      const pushCh = (href, name) => {
+        if (!href || href === "#" || /^javascript:/.test(href)) return;
+        name = cleanStr(name);
+        if (!name || name.length > 80) return;
+        if (/展开|查看更多|点击加载|最新章节|^目录$|书架|首页|下一页|上一页|书签|评论|报错|加入/.test(name)) return;
+        let chUrl; try { chUrl = new URL(href, pageUrl).href; } catch (e) { return; }
+        if (seenUrl.has(chUrl)) return;
+        seenUrl.add(chUrl);
+        chapters.push({ num: chapters.length + 1, name, url: chUrl, state: "可导", pick: true });
+      };
+
+      let links = doc.querySelectorAll("#list dd a, .listmain dd a, #chapterList a, .chapter-list a, .list-chapter a, #list-chapterAll dd a, .catalog a, .mulu a, .chapterlist a, .section-list a, .book_list a, .booklist a, .list_xm a");
       if (!links.length) links = doc.querySelectorAll("#list a, .listmain a, .zjlist a, #chapterlist a, .catalog a, dd a");
-      // 有些站把 dt（卷名）和 dd（章节）混在一起，dt 里的 a 通常不是章节
-      let num = 0;
-      for (const a of links) {
-        const href = a.getAttribute("href");
-        if (!href || href === "#" || href === "javascript:void(0)") continue;
-        const name = cleanStr(a.textContent);
-        if (!name || name.length > 80) continue;
-        // 跳过"展开全部""查看更多"之类
-        if (/展开|查看更多|点击加载|最新章节/.test(name)) continue;
-        num++;
-        let chUrl;
-        try { chUrl = new URL(href, pageUrl).href; } catch (e) { continue; }
-        chapters.push({ num, name, url: chUrl, state: "可导", pick: true });
+      for (const a of links) pushCh(a.getAttribute("href"), a.textContent);
+
+      // 通用兜底：固定选择器没抓到（够多）时，按 URL 里的书号把"像章节"的链接都收进来，不管容器叫什么
+      if (chapters.length < 5) {
+        const bookId = (pageUrl.match(/\/(\d{3,})(?:[\/_.]|$)/) || [])[1];
+        if (bookId) {
+          chapters.length = 0; seenUrl.clear();
+          for (const a of doc.querySelectorAll("a[href]")) {
+            const href = a.getAttribute("href"); if (!href) continue;
+            let abs; try { abs = new URL(href, pageUrl).href; } catch (e) { continue; }
+            if (abs.indexOf(bookId) < 0 || abs.replace(/[#?].*$/, "") === pageUrl.replace(/[#?].*$/, "")) continue;
+            const name = cleanStr(a.textContent);
+            if (name && name.length <= 60 && /[第章节回话卷]|\d/.test(name)) pushCh(href, name);
+          }
+        }
       }
 
       return { title, author, intro, status, words, chapters };
@@ -236,8 +250,9 @@
     /* 解析章节正文 */
     chapter(doc) {
       let content = null;
-      for (const sel of ["#content", "#chaptercontent", ".content", "#BookText", ".chapter_content",
-        ".read-content", "#htmlContent", "#TextContent", "#chapter_content"]) {
+      for (const sel of ["#content", "#chaptercontent", "#novelcontent", ".novelcontent", ".content",
+        "#BookText", ".chapter_content", ".read-content", "#htmlContent", "#TextContent", "#chapter_content",
+        "#nr1", "#nr", ".nr_nr", "#booktext", ".article-content", ".articlecontent", "#txt", ".txtnav", ".neirong"]) {
         content = doc.querySelector(sel);
         if (content && content.textContent.trim().length > 50) break;
         content = null;
@@ -473,11 +488,42 @@
     return book;
   }
 
+  // 去掉正文里的翻页标记行，如 "第1/3页"
+  function stripPageMark(t) {
+    return String(t || "").replace(/[^\n]*第\s*\d+\s*[\/／]\s*\d+\s*页[^\n]*\n?/g, "").trim();
+  }
+  // 由当前页 URL 推下一页：.../ID/ -> .../ID_2/；.../ID_2/ -> .../ID_3/
+  function nextPageUrl(url, page) {
+    const m = url.match(/^(.*?\/)(\d+)(?:_\d+)?(\/?(?:\.html?)?)$/i);
+    if (!m) return null;
+    return m[1] + m[2] + "_" + page + m[3];
+  }
+
   async function downloadChapter(source, chUrl) {
     const rule = RULES[source.type || "biquge"];
     if (!rule) throw new Error("不支持的源站类型");
     const { doc } = await fetchSmart(chUrl);   // 章节被反爬拦了也用渲染兜底
-    return rule.chapter(doc);
+    let text = rule.chapter(doc).text || "";
+    // 多页章节：正文里有"(第N/M页)"就顺着翻页拼接
+    const mm = text.match(/第\s*(\d+)\s*[\/／]\s*(\d+)\s*页/);
+    const total = mm ? parseInt(mm[2], 10) : 1;
+    if (total > 1) {
+      let parts = [stripPageMark(text)];
+      for (let p = 2; p <= total && p <= 20; p++) {
+        const next = nextPageUrl(chUrl, p);
+        if (!next) break;
+        try {
+          const r = await fetchSmart(next);
+          const t = stripPageMark(rule.chapter(r.doc).text || "");
+          if (t) parts.push(t);
+        } catch (e) { break; }
+        await sleep(200 + Math.random() * 300);
+      }
+      text = parts.join("\n");
+    } else {
+      text = stripPageMark(text);
+    }
+    return { text };
   }
 
   /* ============================================================

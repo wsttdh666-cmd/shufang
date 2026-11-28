@@ -658,6 +658,28 @@
     $("webRunBack").hidden = r.active;
   }
 
+  // 后台保活：下载时起前台服务（通知栏进度），切到别的 App 也接着下。
+  // 复用导书那套原生实现（AppToolsPlugin 的 bgStart/bgUpdate/bgStop）。
+  const bg = {
+    on: false,
+    call(m, o) { return Capacitor.nativePromise("AppTools", m, o || {}); },
+    start(title) {
+      if (!NATIVE) return;
+      this.on = true;
+      this.call("bgPermission").catch(() => { });   // 安卓13+ 弹一次通知权限，不等它
+      this.call("bgStart", { title }).catch(() => { });
+    },
+    update(text, done, total) {
+      if (!NATIVE || !this.on) return;
+      this.call("bgUpdate", { text: String(text || ""), done: done | 0, total: total | 0 }).catch(() => { });
+    },
+    stop(text) {
+      if (!NATIVE || !this.on) return;
+      this.on = false;
+      this.call("bgStop", { text: String(text || "") }).catch(() => { });
+    }
+  };
+
   async function webLoop() {
     const r = webRun;
     if (!r || r.active) return;
@@ -666,6 +688,7 @@
     let streak = 0;
     setWebMsg("webRunMsg", "");
     drawWebRun();
+    bg.start("《" + r.book.title + "》 " + r.book.source.name);
 
     try {
       while (r.next < r.list.length) {
@@ -676,6 +699,7 @@
         const ch = r.list[r.next];
         ch.st = "busy";
         drawWebRun();
+        bg.update("正在下载：" + ch.name + "（" + (r.next + 1) + " / " + r.list.length + "）", r.next, r.list.length);
         setWebMsg("webRunMsg", "正在下载：" + ch.name);
 
         let tries = 0;
@@ -716,6 +740,7 @@
       if (r.next >= r.list.length) await webFinish();
     } finally {
       drawWebRun();
+      bg.stop(($("webRunMsg").textContent || "").trim() || $("webRunCount").textContent);
     }
   }
 

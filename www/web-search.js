@@ -499,7 +499,7 @@
     return m[1] + m[2] + "_" + page + m[3];
   }
 
-  async function downloadChapter(source, chUrl) {
+  async function downloadChapter(source, chUrl, onPage) {
     const rule = RULES[source.type || "biquge"];
     if (!rule) throw new Error("不支持的源站类型");
     const { doc } = await fetchSmart(chUrl);   // 章节被反爬拦了也用渲染兜底
@@ -508,10 +508,12 @@
     const mm = text.match(/第\s*(\d+)\s*[\/／]\s*(\d+)\s*页/);
     const total = mm ? parseInt(mm[2], 10) : 1;
     if (total > 1) {
+      if (onPage) onPage(1, total);
       let parts = [stripPageMark(text)];
       for (let p = 2; p <= total && p <= 20; p++) {
         const next = nextPageUrl(chUrl, p);
         if (!next) break;
+        if (onPage) onPage(p, total);
         try {
           const r = await fetchSmart(next);
           const t = stripPageMark(rule.chapter(r.doc).text || "");
@@ -638,22 +640,28 @@
     applyFilter();
 
     const onProgress = () => { renderWebResults(); applyFilter(); };
+    let panDone = false;
+    const status = () => {
+      $("searchMsg").textContent = "在线站点 " + webResults.length + " 个 · 网盘 "
+        + (panDone ? panCount() + " 条" : "搜索中…") + "。用上面的标签切换查看。";
+    };
 
-    // 网盘搜索：index.html 的 doSearch 会自己把结果渲染到 panBox
+    // 网盘搜索：index.html 的 doSearch 会自己把结果渲染到 panBox（慢，不阻塞在线结果）
     const panP = Promise.resolve()
       .then(() => _origPanSearch && _origPanSearch())
-      .catch(() => { });
+      .catch(() => { })
+      .then(() => { panDone = true; status(); applyFilter(); });
     // 在线站点搜索（渐进式）
     const webP = doWebSearchCore(kw, onProgress).catch(e => {
       webErr.push(String((e && e.message) || e));
       onProgress();
     });
 
-    await Promise.all([panP, webP]);
-
+    // 在线结果一好就解锁、显示计数，不等慢的网盘搜索
+    await webP;
     searching = false;
     $("doSearch").disabled = false;
-    $("searchMsg").textContent = "网盘 " + panCount() + " 条 · 在线站点 " + webResults.length + " 个。用上面的标签切换查看。";
+    status();
     renderWebResults();
     applyFilter();
   }
@@ -726,24 +734,42 @@
      书籍详情与章节选择
      ============================================================ */
 
+  let webLoading = false;
   async function openWebBook(result) {
-    $("webInfo").hidden = true;
+    if (webLoading) return;                 // 正在打开另一本，忽略重复点击
+    webLoading = true;
+    // 立刻把详情区显示出来，给出可见的"加载中"反馈并滚动过去，别让用户以为卡死
     $("webRun").hidden = true;
-    setWebMsg("webNotice", "正在加载书的信息和目录…");
+    $("webInfo").hidden = false;
+    $("webTitle").textContent = result.title || "加载中…";
+    $("webSite").textContent = result.source.name;
+    $("webMeta").textContent = "";
+    $("webIntro").textContent = "";
+    $("webAvail").textContent = "";
+    $("webChList").textContent = "";
+    $("webFrom").value = $("webTo").value = "";
     $("webNotice").hidden = false;
+    $("webInfo").scrollIntoView({ block: "start" });
+
+    // 跳秒计时，让用户看到它在动、还要等多久（慢的站约十几秒）
+    let sec = 0;
+    const tick = () => setWebMsg("webNotice", "正在抓取《" + (result.title || "") + "》的目录…已 " + sec + " 秒" + (sec >= 6 ? "（这个站较慢，正用浏览器内核加载）" : ""));
+    tick();
+    const timer = setInterval(() => { sec++; tick(); }, 1000);
 
     try {
       webBook = await loadWebBook(result.source, result.url);
+      clearInterval(timer);
       showWebBook();
     } catch (e) {
-      setWebMsg("webNotice", "加载失败：" + ((e && e.message) || e), "warn");
-      $("webInfo").hidden = false;
+      clearInterval(timer);
+      setWebMsg("webNotice", "这个站没打开：" + ((e && e.message) || e) + " 换搜索结果里别的站试试。", "warn");
       $("webTitle").textContent = result.title || "加载失败";
-      $("webSite").textContent = result.source.name;
-      $("webMeta").textContent = "";
-      $("webIntro").textContent = "";
       $("webAvail").textContent = "";
       $("webChList").textContent = "";
+    } finally {
+      clearInterval(timer);
+      webLoading = false;
     }
   }
 
@@ -960,7 +986,9 @@
         let tries = 0;
         for (; ;) {
           try {
-            const got = await downloadChapter(r.book.source, ch.url);
+            const got = await downloadChapter(r.book.source, ch.url, (p, tot) => {
+              setWebMsg("webRunMsg", "正在下载：" + ch.name + "（本章第 " + p + "/" + tot + " 页）");
+            });
             if (!got.text) throw new Error("正文是空的");
             ch.text = got.text;
             ch.st = "ok";

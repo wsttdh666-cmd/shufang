@@ -59,6 +59,12 @@
     return body;
   }
 
+  // 晋江插在段尾的水印文字「@无限好文，尽在晋江文学城」，是纯文本没有标签，只能按字删
+  const jjWater = s => !s ? s : String(s)
+    .replace(/@?\s*无限好文\s*[，,]?\s*尽在晋江文学城/g, "")
+    .replace(/[ \t　]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n").replace(/^\n+|\n+$/g, "");
+
   async function jjRestore(html, text, note){
     try {
       if (!window.JJFont) return {text, note};
@@ -262,7 +268,7 @@
           if (ns){ const box = doc.createElement("div"); box.innerHTML = ns.innerHTML || ns.textContent; note = textOf(box); }
           const comments = ch.cmt > 0 ? await jjComments(ch, note) : null;
           const r = await jjRestore(html, text, note);
-          return {text: r.text, note: r.note, comments};
+          return {text: jjWater(r.text), note: jjWater(r.note), comments};
         }
         // 非 VIP 章节或非 App 环境，用原来的静态 HTTP
         const {doc, html} = await page(ch.url);
@@ -285,7 +291,7 @@
         if (ns){ const box = doc.createElement("div"); box.innerHTML = ns.innerHTML || ns.textContent; note = textOf(box); }
         const comments = ch.cmt > 0 ? await jjComments(ch, note) : null;
         const r = await jjRestore(html, text, note);
-        return {text: r.text, note: r.note, comments};
+        return {text: jjWater(r.text), note: jjWater(r.note), comments};
       }
     },
     fanqie: {

@@ -297,26 +297,24 @@ public class AppToolsPlugin extends Plugin {
         new Handler(Looper.getMainLooper()).post(() -> {
             android.view.ViewGroup root = (android.view.ViewGroup) getActivity().getWindow().getDecorView();
 
-            // 半透明遮罩 + 提示文字
-            android.widget.FrameLayout wrap = new android.widget.FrameLayout(getContext());
-            wrap.setBackgroundColor(0xE0FFFFFF);  // 白色半透明背景
+            // 后台渲染：不再盖遮罩。隐藏 WebView 放在窗口最底层（index 0），
+            // 被 App 正常界面整个盖住——看不见、不抢点击、不抢焦点，用户可以照常用 App。
+            // 仍挂在窗口上、尺寸正常，晋江页面的脚本才会照常跑完、把正文渲染出来。
+            final android.widget.FrameLayout wrap = new android.widget.FrameLayout(getContext());
+            wrap.setClickable(false);
+            wrap.setFocusable(false);
+            wrap.setImportantForAccessibility(android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
 
-            android.widget.TextView hint = new android.widget.TextView(getContext());
-            hint.setText("正在加载 VIP 正文…");
-            hint.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
-            hint.setTextColor(0xFF5F6878);
-            hint.setGravity(android.view.Gravity.CENTER);
-            android.widget.FrameLayout.LayoutParams hintLp = new android.widget.FrameLayout.LayoutParams(
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
-            hintLp.gravity = android.view.Gravity.CENTER;
-            wrap.addView(hint, hintLp);
+            // 提示文字不再显示（进度在导书卡片里），保留一个未挂载的 TextView 供下面复用签名
+            final android.widget.TextView hint = new android.widget.TextView(getContext());
 
-            // WebView 全屏但在提示文字后面（用户看到的是提示）
             final WebView wv = new WebView(getContext());
-            wrap.addView(wv, 0, new android.widget.FrameLayout.LayoutParams(
+            wv.setFocusable(false);
+            wv.setFocusableInTouchMode(false);
+            wrap.addView(wv, new android.widget.FrameLayout.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT));
 
-            root.addView(wrap, new android.view.ViewGroup.LayoutParams(
+            root.addView(wrap, 0, new android.view.ViewGroup.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT));
 
             WebSettings s = wv.getSettings();

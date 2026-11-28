@@ -223,10 +223,13 @@
      源站配置
      ============================================================ */
 
+  // 默认源站：域名经常变，打不开就到"密钥"里改地址或用"测试搜索"找对路径。
+  // 搜索路径按笔趣阁家族最常见的几种格式预设，可能需要按站点微调。
   const DEFAULT_SOURCES = [
-    { id: "xbiquge", name: "笔趣阁X", base: "https://www.xbiquge.so", searchPath: "/search.php?keyword={kw}", type: "biquge", enabled: true },
-    { id: "biquge", name: "笔趣阁", base: "https://www.biqg.cc", searchPath: "/s?q={kw}", type: "biquge", enabled: true },
+    { id: "bixia", name: "笔下文学", base: "https://www.bixia01.cc", searchPath: "/s?q={kw}", type: "biquge", enabled: true },
+    { id: "18shuw", name: "18书屋", base: "https://www.18shuw.com", searchPath: "/search.php?keyword={kw}", type: "biquge", enabled: true },
     { id: "69shuba", name: "69书吧", base: "https://www.69shuba.cx", searchPath: "/modules/article/search.php?searchkey={kw}", type: "biquge", enabled: true },
+    { id: "biquge", name: "笔趣阁", base: "https://www.biqg.cc", searchPath: "/s?q={kw}", type: "biquge", enabled: true },
   ];
 
   let sources = [];
@@ -244,13 +247,34 @@
      搜索引擎
      ============================================================ */
 
+  // 笔趣阁家族常见的搜索路径，配置路径搜不到时按顺序再试
+  const FALLBACK_PATHS = [
+    "/s?q={kw}", "/search.php?keyword={kw}", "/search.php?q={kw}",
+    "/modules/article/search.php?searchkey={kw}", "/search.html?q={kw}", "/search/{kw}.html"
+  ];
+
   async function searchOne(src, keyword) {
     const rule = RULES[src.type || "biquge"];
     if (!rule) return [];
-    const url = src.base.replace(/\/+$/, "") + src.searchPath.replace("{kw}", encodeURIComponent(keyword));
-    const { doc } = await fetchPage(url);
-    const results = rule.search(doc, src.base);
-    return results.map(r => Object.assign(r, { source: src }));
+    const base = src.base.replace(/\/+$/, "");
+    const paths = [src.searchPath];
+    for (const p of FALLBACK_PATHS) if (!paths.includes(p)) paths.push(p);
+
+    let lastErr = null;
+    for (const path of paths) {
+      const url = base + path.replace("{kw}", encodeURIComponent(keyword));
+      try {
+        const { doc } = await fetchPage(url);
+        const results = rule.search(doc, src.base);
+        if (results.length) return results.map(r => Object.assign(r, { source: src }));
+      } catch (e) {
+        lastErr = e;
+        // 域名本身连不上 / 被拦，就别再试其它路径了
+        if (/连不上|403|429|503/.test(String((e && e.message) || e))) throw e;
+      }
+    }
+    if (lastErr) throw lastErr;
+    return [];
   }
 
   async function searchAll(keyword) {
@@ -303,9 +327,6 @@
      UI 状态
      ============================================================ */
 
-  let searchMode = "pan";
-  try { searchMode = localStorage.getItem("sf:searchMode") || "pan"; } catch (e) { }
-
   let webResults = [];
   let webBook = null;
   let webRun = null;
@@ -320,91 +341,113 @@
   }
 
   /* ============================================================
-     搜索模式切换
+     统一搜索：一次搜网盘 + 在线站点，结果用标签筛选
      ============================================================ */
 
-  // 保存原有的搜索函数引用
+  // 原网盘搜索（index.html 里的 doSearch）：搜完结果在全局 PAN 里、渲染到 panBox
   const _origPanSearch = window.doSearch;
 
-  function setSearchMode(mode) {
-    searchMode = mode;
-    try { localStorage.setItem("sf:searchMode", mode); } catch (e) { }
-    for (const b of document.querySelectorAll("[data-search]"))
-      b.setAttribute("aria-checked", b.dataset.search === mode);
+  let filter = "all";                 // all | pan | web
+  try { filter = localStorage.getItem("sf:filter") || "all"; } catch (e) { }
+  let searchDone = false;
+  let webErr = [];
 
-    const isPan = mode === "pan";
-    $("doSearch").textContent = isPan ? "搜网盘分享" : "搜在线站点";
-    $("searchMsg").textContent = isPan
-      ? "在百度、夸克等网盘的公开分享里找别人存下来的书。只留下标题里带关键词、看起来是小说的结果。"
-      : '在配置好的小说站点里直接搜索。可以预览、选章节、下载到书架。到"密钥"页面管理源站。';
-    if (isPan) {
+  function panCount() {
+    try { return (PAN.good ? PAN.good.length : 0) + (PAN.rest ? PAN.rest.length : 0); }
+    catch (e) { return 0; }
+  }
+
+  function applyFilter() {
+    for (const b of document.querySelectorAll("[data-filter]"))
+      b.setAttribute("aria-checked", b.dataset.filter === filter);
+    if (!searchDone) return;
+
+    const showPan = filter === "all" || filter === "pan";
+    const showWeb = filter === "all" || filter === "web";
+    // 正在看某本书的详情 / 下载进度时，不被筛选打断
+    const inWebDrill = !$("webInfo").hidden || !$("webRun").hidden;
+
+    $("panBox").hidden = !(showPan && panCount() > 0);
+    if (!showWeb) {
       $("webBox").hidden = true;
       $("webInfo").hidden = true;
       $("webRun").hidden = true;
-    } else {
-      $("panBox").hidden = true;
+    } else if (!inWebDrill) {
+      $("webBox").hidden = !(webResults.length > 0 || webErr.length > 0);
     }
   }
 
-  // 注册 seg 按钮
-  for (const b of document.querySelectorAll("[data-search]"))
-    b.onclick = () => setSearchMode(b.dataset.search);
+  function setFilter(f) {
+    filter = f;
+    try { localStorage.setItem("sf:filter", f); } catch (e) { }
+    applyFilter();
+  }
 
-  // 劫持搜索按钮和回车
-  $("doSearch").onclick = () => {
-    if (searchMode === "web") doWebSearch();
-    else if (_origPanSearch) _origPanSearch();
-  };
-  $("kw").onkeydown = e => {
-    if (e.key === "Enter") {
-      if (searchMode === "web") doWebSearch();
-      else if (_origPanSearch) _origPanSearch();
-    }
-  };
+  for (const b of document.querySelectorAll("[data-filter]"))
+    b.onclick = () => setFilter(b.dataset.filter);
 
-  // 恢复保存的模式
-  setSearchMode(searchMode);
+  // 搜索按钮 / 回车：同时搜两边
+  $("doSearch").onclick = doCombinedSearch;
+  $("kw").onkeydown = e => { if (e.key === "Enter") doCombinedSearch(); };
 
-  /* ============================================================
-     在线搜索
-     ============================================================ */
+  // 恢复保存的筛选高亮
+  applyFilter();
 
-  async function doWebSearch() {
+  async function doCombinedSearch() {
     const kw = $("kw").value.trim();
     if (!kw) { $("searchMsg").textContent = "先输入书名或作者。"; return; }
-    if (!sources.some(s => s.enabled)) { $("searchMsg").textContent = '没有启用的源站。到"密钥"页面添加源站。'; return; }
 
     $("doSearch").disabled = true;
-    $("webBox").hidden = true;
+    $("searchMsg").textContent = "搜索中，可能要等十几秒…";
     $("webInfo").hidden = true;
     $("webRun").hidden = true;
-    $("searchMsg").textContent = "正在搜索，可能要等几秒…";
 
-    try {
-      const { results, errors } = await searchAll(kw);
-      webResults = results;
+    // 网盘搜索：index.html 的 doSearch 会自己把结果渲染到 panBox
+    const panP = Promise.resolve()
+      .then(() => _origPanSearch && _origPanSearch())
+      .catch(() => { });
+    // 在线站点搜索
+    const webP = doWebSearchCore(kw).catch(e => {
+      webErr = [String((e && e.message) || e)];
+      webResults = [];
       renderWebResults();
+    });
 
-      let msg = "";
-      if (results.length) msg = "找到 " + results.length + " 个结果。";
-      else msg = '没有找到结果。试试换个关键词，或到"密钥"里检查源站。';
-      if (errors.length) msg += "（" + errors.length + " 个源站出错：" + errors.join("；") + "）";
-      $("searchMsg").textContent = msg;
-    } catch (e) {
-      $("searchMsg").textContent = "搜索出错：" + ((e && e.message) || e);
-    }
+    await Promise.all([panP, webP]);
+
+    searchDone = true;
     $("doSearch").disabled = false;
+    $("searchMsg").textContent = "网盘 " + panCount() + " 条 · 在线站点 " + webResults.length + " 个。用上面的标签切换查看。";
+    applyFilter();
+  }
+
+  /* ============================================================
+     在线站点搜索
+     ============================================================ */
+
+  async function doWebSearchCore(kw) {
+    webErr = [];
+    webResults = [];
+    if (!sources.some(s => s.enabled)) {
+      webErr = ['没有启用的源站。到"密钥"页面添加或启用源站。'];
+      renderWebResults();
+      return;
+    }
+    const { results, errors } = await searchAll(kw);
+    webResults = results;
+    webErr = errors || [];
+    renderWebResults();
   }
 
   function renderWebResults() {
     const box = $("webList");
     box.textContent = "";
     $("webCount").textContent = webResults.length + " 个";
-    $("webBox").hidden = !webResults.length;
 
     if (!webResults.length) {
-      box.append(el("p", "hint", "没有搜到结果。"));
-      return;
+      box.append(el("p", "hint", webErr.length
+        ? "没搜到。" + webErr.join("；")
+        : '没搜到结果。换个关键词，或到"密钥"里检查、添加源站。'));
     }
 
     for (const r of webResults) {
@@ -466,6 +509,7 @@
     $("webAddShelf").textContent = "加入书架";
 
     drawWebPicks();
+    $("webBox").hidden = true;        // 详情替换掉结果列表
     $("webInfo").hidden = false;
     $("webInfo").scrollIntoView({ block: "start" });
   }
@@ -523,7 +567,7 @@
     if (webRun && webRun.active) return;
     $("webInfo").hidden = true;
     $("webRun").hidden = true;
-    $("webBox").hidden = false;
+    applyFilter();                    // 回到结果列表，遵守当前筛选
   };
 
   /* ============================================================

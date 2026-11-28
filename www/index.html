@@ -112,11 +112,12 @@ label.inline select{width:auto;padding:6px 8px;font-size:14px}
 <div class="view" id="v-search">
   <section>
     <label for="kw">书名或作者<input type="search" id="kw" autocomplete="off" enterkeyhint="search"></label>
-    <div class="seg" role="radiogroup" aria-label="搜索方式">
-      <button role="radio" data-search="pan" aria-checked="true">网盘分享</button>
-      <button role="radio" data-search="web" aria-checked="false">在线站点</button>
+    <div class="seg" role="radiogroup" aria-label="筛选结果">
+      <button role="radio" data-filter="all" aria-checked="true">全部</button>
+      <button role="radio" data-filter="pan" aria-checked="false">网盘分享</button>
+      <button role="radio" data-filter="web" aria-checked="false">在线站点</button>
     </div>
-    <div class="row fill"><button class="primary" id="doSearch">搜网盘分享</button></div>
+    <div class="row fill"><button class="primary" id="doSearch">搜索</button></div>
     <p class="hint" id="searchMsg">在百度、夸克等网盘的公开分享里找别人存下来的书。只留下标题里带关键词、看起来是小说的结果。</p>
   </section>
   <section id="panBox" hidden><h2>网盘分享<small id="panCount"></small></h2>

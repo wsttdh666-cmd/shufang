@@ -39,11 +39,17 @@
   // 从晋江正文容器里剔掉段评计数徽标和各种 UI，只留正文文字。
   function stripJJBody(body){
     if (!body) return body;
+    // 晋江段评模式下，正文每段的结构是：
+    //   span.onebook_paragraph_comment_anchor > span.onebook_paragraph_comment_text（正文文字）
+    // 这两个 class 名里都带 "comment"，但它们【就是正文】，绝不能当段评 UI 删掉。
+    // 真正要去掉的只有：段评数字气泡(_bubble)、段评面板/侧栏/头像/按钮、弹幕，以及收藏/举报/脚本。
     body.querySelectorAll(
-      "[id^=favorite], #report_box, .float_favorite, #mongolia_layer, h2, script, style, " +
+      "[id^=favorite], #report_box, .float_favorite, #mongolia_layer, h2, script, style, noscript, " +
       "div[align=center], [style*='display:none' i], [style*='display: none' i], .readsmall, " +
-      "#note_danmu_wrapper, [class*=comment i], [id*=comment i], [class*=pinglun i], " +
-      "[class*=danmu i], [onclick*=comment i], [onclick*=pinglun i], [class*=jjplus i], sup"
+      "#note_danmu_wrapper, " +
+      ".onebook_paragraph_comment_bubble, .onebook_paragraph_comment_bubble_mount, " +
+      "[class*=comment_panel i], [class*=comment_side i], [class*=comment_avatar i], " +
+      "[class*=comment_button i], [class*=pinglun i], [class*=danmu i], [class*=jjplus i], sup"
     ).forEach(n => n.remove());
     // 段评计数常是段尾一个只含数字的小元素（span/a/i/em/b/font），剔掉
     body.querySelectorAll("span, a, i, em, b, font").forEach(n => {
@@ -86,7 +92,7 @@
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
   const wanzi = n => n >= 10000 ? (n / 10000).toFixed(1) + " 万字" : n + " 字";
-  const clean = s => String(s || "").replace(/ /g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  const clean = s => String(s || "").replace(/[​‌‍⁠﻿]/g, "").replace(/ /g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   function textOf(node){
     if (!node) return "";
     const c = node.cloneNode(true);
